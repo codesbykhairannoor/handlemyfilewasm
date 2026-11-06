@@ -257,22 +257,20 @@ fn classify_single_paragraph(p: &mut ParagraphBlock, median_body_size: f64, page
         || full_text.contains(".io")
         || full_text.contains("github.c");
 
-    let t_upper = full_text.trim().to_uppercase();
-    let is_major_structural_title = t_upper == "DAFTAR ISI"
-        || t_upper == "TABLE OF CONTENTS"
-        || t_upper == "KATA PENGANTAR"
-        || t_upper == "LEMBAR PENGESAHAN"
-        || t_upper == "DAFTAR TABEL"
-        || t_upper == "DAFTAR GAMBAR"
-        || t_upper == "DAFTAR LAMPIRAN"
-        || t_upper == "DAFTAR PUSTAKA"
-        || t_upper == "REFERENCES"
-        || t_upper == "BIBLIOGRAPHY"
-        || t_upper.starts_with("BAB ")
-        || t_upper.starts_with("CHAPTER ");
+    let has_alphabetic = full_text.chars().any(|c| c.is_alphabetic());
+    let is_all_caps = has_alphabetic && full_text.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
+    let is_standalone_heading_layout = p.lines.len() <= 2 && total_char_count < 100 && !is_url_or_link;
 
-    if is_major_structural_title || (!is_url_or_link && p.lines.len() <= 2 && total_char_count < 100) {
-        if is_major_structural_title || max_font_size >= 16.0 || max_font_size >= median_body_size * 1.35 {
+    // 100% Language-Agnostic Major Structural Heading:
+    // A standalone short block that is:
+    // a. ALL-CAPS and bold (universal standard for major chapter headings across Latin/Cyrillic scripts)
+    // b. Centered and bold with elevated prominence (universal across CJK, Arabic, Indic, and all scripts)
+    // c. Significantly larger font size (>= 16pt or >= 1.35x median)
+    let is_prominent_structural_heading = is_standalone_heading_layout
+        && ((is_all_caps && has_bold) || (p.alignment == "center" && has_bold));
+
+    if is_standalone_heading_layout {
+        if is_prominent_structural_heading || max_font_size >= 16.0 || max_font_size >= median_body_size * 1.35 {
             p.tag = "H1".to_string();
             p.is_header = true;
             p.space_before = 0.0;

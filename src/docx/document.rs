@@ -1011,29 +1011,22 @@ fn should_insert_page_break(
     }
 
     // 2. Semantic Chapter / Major Section Boundary
-    // If the next page begins with a major heading (H1, H2, or named title like DAFTAR ISI, BAB) near the top of the page
+    // If the next page begins with a major heading or prominent section title near the top of the page
+    // (100% language-agnostic: derived purely from H1/H2 classification, bold uppercase, or centered bold prominence)
     if let Some(first_p) = curr_page.paragraphs.first() {
-        let first_text = first_p.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
-        let t_upper = first_text.trim().to_uppercase();
+        if first_p.bbox.y_min <= 160.0 && first_p.lines.len() <= 2 {
+            let first_text = first_p.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
+            let has_alpha = first_text.chars().any(|c| c.is_alphabetic());
+            let is_all_caps = has_alpha && first_text.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
+            let has_bold = first_p.lines.iter().any(|l| l.words.iter().any(|w| w.style.is_bold));
+            let is_centered = first_p.alignment == "center";
 
-        let is_major_section_title = t_upper == "DAFTAR ISI"
-            || t_upper.starts_with("DAFTAR ISI")
-            || t_upper.starts_with("TABLE OF CONTENTS")
-            || t_upper.starts_with("KATA PENGANTAR")
-            || t_upper.starts_with("LEMBAR PENGESAHAN")
-            || t_upper.starts_with("DAFTAR TABEL")
-            || t_upper.starts_with("DAFTAR GAMBAR")
-            || t_upper.starts_with("DAFTAR LAMPIRAN")
-            || t_upper.starts_with("DAFTAR PUSTAKA")
-            || t_upper.starts_with("REFERENCES")
-            || t_upper.starts_with("BIBLIOGRAPHY")
-            || t_upper.starts_with("BAB ")
-            || t_upper.starts_with("CHAPTER ")
-            || (first_p.is_header && (first_p.tag == "H1" || first_p.tag == "H2"))
-            || (first_p.alignment == "center" && first_p.lines.len() <= 2 && first_text.len() <= 60 && first_p.lines.iter().any(|l| l.words.iter().any(|w| w.style.is_bold)));
+            let is_major_section_header = (first_p.is_header && (first_p.tag == "H1" || first_p.tag == "H2"))
+                || ((is_all_caps || is_centered) && has_bold && first_text.len() <= 80);
 
-        if is_major_section_title && first_p.bbox.y_min <= 160.0 {
-            return true;
+            if is_major_section_header {
+                return true;
+            }
         }
     }
 
