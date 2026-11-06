@@ -1,0 +1,24 @@
+{
+  "name": "high-precision-pdf-to-docx",
+  "version": "1.0.0",
+  "description": "High precision PDF to DOCX converter engine using C++ WASM",
+  "main": "lib/index.js",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "emcc wasm/pdf_converter_bridge.cpp src/LayoutAnalyzer.cpp src/DocxGenerator.cpp third_party/miniz/miniz.c third_party/miniz/miniz_tdef.c third_party/miniz/miniz_tinfl.c third_party/miniz/miniz_zip.c -O3 -s WASM=1 -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8'] -s EXPORT_ES6=1 -s ALLOW_MEMORY_GROWTH=1 -o lib/pdf_converter_wasm.js"
+  },
+  "keywords": [
+    "pdf",
+    "docx",
+    "wasm",
+    "cpp"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "@hyzyla/pdfium": "^2.1.13",
+    "clawpdf": "^0.3.0",
+    "pdfjs-dist": "^5.6.205",
+    "vite": "^8.1.5"
+  }
+}

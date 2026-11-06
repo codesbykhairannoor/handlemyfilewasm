@@ -1,0 +1,277 @@
+pub struct DocxRelationships;
+
+impl DocxRelationships {
+    /// Generates [Content_Types].xml conditionally based on header/footer existence
+    pub fn content_types(has_header: bool, has_footer: bool) -> String {
+        let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
+"#);
+        if has_header {
+            xml.push_str(r#"  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+"#);
+        }
+        if has_footer {
+            xml.push_str(r#"  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
+"#);
+        }
+        xml.push_str("</Types>");
+        xml
+    }
+
+    /// Generates _rels/.rels
+    pub fn package_relationships() -> String {
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#.to_string()
+    }
+
+    /// Generates word/_rels/document.xml.rels with image, header, and footer relationships
+    pub fn document_relationships(image_rels: &[(usize, &str)], has_header: bool, has_footer: bool) -> String {
+        let mut rels = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
+"#);
+        if has_header {
+            rels.push_str(r#"  <Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+"#);
+        }
+        if has_footer {
+            rels.push_str(r#"  <Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>
+"#);
+        }
+        for &(img_id, ext) in image_rels {
+            rels.push_str(&format!(
+                r#"  <Relationship Id="rIdImg{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image{}.{}"/>
+"#,
+                img_id, img_id, ext
+            ));
+        }
+        rels.push_str("</Relationships>");
+        rels
+    }
+
+    /// Generates word/header1.xml preserving document running header
+    pub fn header(header_p: Option<&crate::models::ParagraphBlock>) -> String {
+        let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+"#);
+        if let Some(p) = header_p {
+            let mut left_text = String::new();
+            let mut right_text = String::new();
+            let mut saw_tab = false;
+
+            for line in &p.lines {
+                for run in &line.runs {
+                    if run.is_tab {
+                        saw_tab = true;
+                    } else if !run.text.is_empty() {
+                        if saw_tab {
+                            if !right_text.is_empty() {
+                                right_text.push(' ');
+                            }
+                            right_text.push_str(&run.text);
+                        } else {
+                            if !left_text.is_empty() {
+                                left_text.push(' ');
+                            }
+                            left_text.push_str(&run.text);
+                        }
+                    }
+                }
+            }
+
+            if saw_tab && !right_text.is_empty() {
+                // Dual header (left date + right title) via 100% width borderless table
+                xml.push_str(&format!(
+                    r#"  <w:tbl>
+    <w:tblPr>
+      <w:tblW w:w="5000" w:type="pct"/>
+      <w:tblBorders>
+        <w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+      </w:tblBorders>
+      <w:tblCellMar>
+        <w:top w:w="0" w:type="dxa"/>
+        <w:left w:w="0" w:type="dxa"/>
+        <w:bottom w:w="0" w:type="dxa"/>
+        <w:right w:w="0" w:type="dxa"/>
+      </w:tblCellMar>
+    </w:tblPr>
+    <w:tr>
+      <w:tc>
+        <w:tcPr><w:tcW w:w="1800" w:type="pct"/></w:tcPr>
+        <w:p>
+          <w:pPr><w:pStyle w:val="Header"/><w:jc w:val="left"/></w:pPr>
+          <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
+        </w:p>
+      </w:tc>
+      <w:tc>
+        <w:tcPr><w:tcW w:w="3200" w:type="pct"/></w:tcPr>
+        <w:p>
+          <w:pPr><w:pStyle w:val="Header"/><w:jc w:val="right"/></w:pPr>
+          <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
+        </w:p>
+      </w:tc>
+    </w:tr>
+  </w:tbl>
+"#,
+                    crate::utils::escape_xml(&left_text),
+                    crate::utils::escape_xml(&right_text)
+                ));
+            } else {
+                let is_right = p.alignment == "right" || p.bbox.x_min >= 300.0;
+                let jc = if is_right { "right" } else { "left" };
+                let text = if !left_text.is_empty() { left_text } else { right_text };
+                xml.push_str(&format!(
+                    r#"  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header"/>
+      <w:jc w:val="{}"/>
+    </w:pPr>
+    <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
+  </w:p>
+"#,
+                    jc,
+                    crate::utils::escape_xml(&text)
+                ));
+            }
+        }
+        xml.push_str("</w:hdr>");
+        xml
+    }
+
+    /// Generates word/footer1.xml matching original footer alignment and content
+    pub fn footer(footer_p: Option<&crate::models::ParagraphBlock>) -> String {
+        let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+"#);
+        if let Some(p) = footer_p {
+            let mut left_text = String::new();
+            let mut right_text = String::new();
+            let mut saw_tab = false;
+
+            for line in &p.lines {
+                for run in &line.runs {
+                    if run.is_tab {
+                        saw_tab = true;
+                    } else if !run.text.is_empty() {
+                        if saw_tab {
+                            if !right_text.is_empty() {
+                                right_text.push(' ');
+                            }
+                            right_text.push_str(&run.text);
+                        } else {
+                            if !left_text.is_empty() {
+                                left_text.push(' ');
+                            }
+                            left_text.push_str(&run.text);
+                        }
+                    }
+                }
+            }
+
+            let full_text: String = p
+                .lines
+                .iter()
+                .flat_map(|l| l.words.iter().map(|w| w.text.as_str()))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let is_multi_element = saw_tab || full_text.contains("http://") || full_text.contains("https://");
+
+            if is_multi_element {
+                // Dual footer (left URL + right page number) via 100% width borderless table
+                // Never wraps or misaligns regardless of URL length
+                let url_content = if !left_text.is_empty() {
+                    crate::utils::escape_xml(&left_text)
+                } else {
+                    crate::utils::escape_xml(&full_text)
+                };
+
+                xml.push_str(&format!(
+                    r#"  <w:tbl>
+    <w:tblPr>
+      <w:tblW w:w="5000" w:type="pct"/>
+      <w:tblBorders>
+        <w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+        <w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>
+      </w:tblBorders>
+      <w:tblCellMar>
+        <w:top w:w="0" w:type="dxa"/>
+        <w:left w:w="0" w:type="dxa"/>
+        <w:bottom w:w="0" w:type="dxa"/>
+        <w:right w:w="0" w:type="dxa"/>
+      </w:tblCellMar>
+    </w:tblPr>
+    <w:tr>
+      <w:tc>
+        <w:tcPr><w:tcW w:w="4200" w:type="pct"/></w:tcPr>
+        <w:p>
+          <w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="left"/></w:pPr>
+          <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
+        </w:p>
+      </w:tc>
+      <w:tc>
+        <w:tcPr><w:tcW w:w="800" w:type="pct"/></w:tcPr>
+        <w:p>
+          <w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="right"/></w:pPr>
+          <w:fldSimple w:instr="PAGE"/><w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t>/</w:t></w:r><w:fldSimple w:instr="NUMPAGES"/>
+        </w:p>
+      </w:tc>
+    </w:tr>
+  </w:tbl>
+"#,
+                    url_content
+                ));
+            } else {
+                // Pure page number: determine alignment (right vs center)
+                let is_right_aligned = p.alignment == "right" || p.bbox.x_min >= 350.0;
+                let jc = if is_right_aligned { "right" } else { "center" };
+
+                xml.push_str(&format!(
+                    r#"  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:jc w:val="{}"/>
+    </w:pPr>
+    <w:fldSimple w:instr="PAGE"/>
+  </w:p>
+"#,
+                    jc
+                ));
+            }
+        }
+        xml.push_str("</w:ftr>");
+        xml
+    }
+
+    /// Generates word/settings.xml
+    pub fn settings() -> String {
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:defaultTabStop w:val="720"/>
+  <w:characterSpacingControl w:val="doNotCompress"/>
+</w:settings>"#.to_string()
+    }
+}
+

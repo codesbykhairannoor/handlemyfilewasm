@@ -1,0 +1,162 @@
+Untuk membongkar algoritma ekstraksi tabel dari PDF dan mengimplementasikannya dalam WebAssembly menggunakan Rust, kita perlu memahami beberapa konsep geometri komputasional dan teknik optimasi. Berikut adalah penjelasan mendetail untuk setiap bagian yang Anda sebutkan:
+
+### 1. Algoritma Tabel Bergaris
+
+#### a. Collinear Segment Merging
+Formulasi matematika untuk penyatuan segmen kolinear dengan toleransi spasial epsilon (\(\epsilon\)) dapat dinyatakan sebagai berikut:
+
+1. **Definisi Segmen Kolinear**: Dua segmen garis \(S_1\) dan \(S_2\) dianggap kolinear jika mereka terletak pada garis lurus yang sama. Secara matematis, ini dapat dinyatakan dengan persamaan garis \(y = mx + c\) yang sama untuk kedua segmen.
+
+2. **Toleransi Epsilon**: Dua segmen dianggap dapat digabungkan jika jarak antara titik akhir dari satu segmen ke titik awal segmen lainnya kurang dari \(\epsilon\). Misalkan \(S_1 = (x_1, y_1) \rightarrow (x_2, y_2)\) dan \(S_2 = (x_3, y_3) \rightarrow (x_4, y_4)\), maka:
+   \[
+   \text{Distance}(x_2, y_2, x_3, y_3) < \epsilon
+   \]
+
+3. **Pseudocode**:
+   ```rust
+   fn merge_collinear_segments(segments: &mut Vec<Segment>, epsilon: f32) {
+       segments.sort_by(|a, b| a.start.x.partial_cmp(&b.start.x).unwrap());
+       let mut merged_segments = Vec::new();
+       let mut current_segment = segments[0].clone();
+
+       for segment in segments.iter().skip(1) {
+           if are_collinear(&current_segment, segment) && distance(&current_segment.end, &segment.start) < epsilon {
+               current_segment.end = segment.end.clone();
+           } else {
+               merged_segments.push(current_segment);
+               current_segment = segment.clone();
+           }
+       }
+       merged_segments.push(current_segment);
+       *segments = merged_segments;
+   }
+   ```
+
+#### b. Intersection Graph Ortogonal
+Untuk membangun intersection graph ortogonal:
+
+1. **Definisi Intersection**: Dua garis berpotongan jika satu garis horizontal dan satu garis vertikal memiliki koordinat yang saling melintasi.
+
+2. **Pseudocode**:
+   ```rust
+   fn build_intersection_graph(horizontal_lines: &[Line], vertical_lines: &[Line]) -> Graph {
+       let mut graph = Graph::new();
+       for h_line in horizontal_lines {
+           for v_line in vertical_lines {
+               if h_line.y >= v_line.start.y && h_line.y <= v_line.end.y &&
+                  v_line.x >= h_line.start.x && v_line.x <= h_line.end.x {
+                   graph.add_edge(h_line.id, v_line.id);
+               }
+           }
+       }
+       graph
+   }
+   ```
+
+#### c. Algoritma Cycle-Finding
+Untuk mengekstraksi sel primitif dari graf planar:
+
+1. **Cycle-Finding**: Gunakan algoritma DFS untuk menemukan siklus dalam graf planar. Siklus ini mewakili sel tabel.
+
+2. **Pseudocode**:
+   ```rust
+   fn find_cycles(graph: &Graph) -> Vec<Cycle> {
+       let mut cycles = Vec::new();
+       let mut visited = HashSet::new();
+       for node in graph.nodes() {
+           if !visited.contains(&node) {
+               let cycle = dfs_find_cycle(graph, node, &mut visited);
+               if cycle.is_some() {
+                   cycles.push(cycle.unwrap());
+               }
+           }
+       }
+       cycles
+   }
+   ```
+
+### 2. Algoritma Tabel Tanpa Garis Vertikal
+
+#### a. Whitespace Projection Histogram Profiling
+Untuk mendeteksi column gutters:
+
+1. **Histogram Profiling**: Proyeksikan whitespace pada sumbu X dan hitung frekuensi spasi.
+
+2. **Pseudocode**:
+   ```rust
+   fn whitespace_projection(text_boxes: &[TextBox]) -> Vec<i32> {
+       let mut histogram = vec![0; MAX_WIDTH];
+       for box in text_boxes {
+           for x in box.left..box.right {
+               histogram[x] += 1;
+           }
+       }
+       histogram
+   }
+   ```
+
+#### b. Thresholding
+Untuk membedakan celah antar-kata dan antar-kolom:
+
+1. **Threshold Calculation**: Gunakan metode statistik seperti Otsu's method untuk menentukan ambang batas.
+
+2. **Pseudocode**:
+   ```rust
+   fn calculate_threshold(histogram: &[i32]) -> i32 {
+       // Implement Otsu's method or similar
+       otsu_threshold(histogram)
+   }
+   ```
+
+#### c. Pengelompokan Teks
+Untuk mengelompokkan teks ke dalam sel tabel:
+
+1. **Bounding-Box Containment**: Periksa apakah bounding box teks berada dalam area sel.
+
+2. **Pseudocode**:
+   ```rust
+   fn group_text_into_cells(text_boxes: &[TextBox], cells: &[Cell]) -> Vec<Vec<TextBox>> {
+       let mut grouped_texts = vec![Vec::new(); cells.len()];
+       for (i, cell) in cells.iter().enumerate() {
+           for text_box in text_boxes {
+               if cell.contains(text_box) {
+                   grouped_texts[i].push(text_box.clone());
+               }
+           }
+       }
+       grouped_texts
+   }
+   ```
+
+### 3. Efisiensi di WebAssembly (Pure Rust)
+
+#### a. Arsitektur Memory-Safe
+Untuk memastikan efisiensi dan keamanan memori:
+
+1. **Rust Safety**: Manfaatkan fitur safety Rust seperti borrow checker dan ownership untuk menghindari kesalahan memori.
+
+2. **Minimal Footprint**: Hindari penggunaan library besar seperti OpenCV atau Poppler. Gunakan crate Rust yang ringan dan spesifik.
+
+3. **Pseudocode**:
+   ```rust
+   #[wasm_bindgen]
+   pub fn process_pdf(data: &[u8]) -> Result<TableData, JsValue> {
+       let pdf = PdfDocument::from_bytes(data)?;
+       let tables = extract_tables(&pdf);
+       Ok(tables)
+   }
+   ```
+
+#### b. Perbandingan dengan Library Open-Source
+Kelemahan fatal dari beberapa library open-source:
+
+1. **Ukuran Besar**: Library seperti OpenCV dan Poppler memiliki ukuran yang besar dan tidak efisien untuk aplikasi web.
+
+2. **Ketergantungan C/C++**: Banyak library bergantung pada C/C++ yang dapat menyebabkan masalah kompatibilitas dan keamanan.
+
+3. **Pseudocode**:
+   ```rust
+   // Rust implementation is lightweight and efficient
+   ```
+
+Dengan pendekatan ini, kita dapat membangun sistem ekstraksi tabel dari PDF yang efisien dan aman untuk dijalankan di browser menggunakan WebAssembly.
