@@ -441,7 +441,7 @@ fn assemble_paragraphs_from_words(mut words: Vec<Word>) -> Vec<ParagraphBlock> {
         });
     }
 
-    // Split into distinct ParagraphBlocks on bullet/numbered items, paragraph gaps,
+    // Split into distinct ParagraphBlocks on bullet/numbered items, TOC lines, paragraph gaps,
     // font size transitions, or heading style boundaries.
     let mut blocks = Vec::new();
     let mut curr_lines: Vec<TextLine> = Vec::new();
@@ -454,41 +454,46 @@ fn assemble_paragraphs_from_words(mut words: Vec<Word>) -> Vec<ParagraphBlock> {
             false
         };
 
+        let line_is_toc = is_toc_line_entry(&line);
+
         let is_para_break = if let Some(prev) = curr_lines.last() {
-            let gap = line.bbox.y_min - prev.bbox.y_max;
-            let prev_h = prev.bbox.height().max(8.0);
-
-            let prev_last_word = prev.words.last().map(|w| w.text.trim()).unwrap_or("");
-            let ends_sentence = prev_last_word.ends_with('.')
-                || prev_last_word.ends_with('?')
-                || prev_last_word.ends_with('!')
-                || prev_last_word.ends_with(':')
-                || prev_last_word.ends_with(';')
-                || prev_last_word.ends_with(".\"")
-                || prev_last_word.ends_with("?'")
-                || prev_last_word.ends_with("!'");
-
-            // Dominant font sizes
-            let prev_size = prev.words.iter().map(|w| w.style.font_size).fold(0.0f64, f64::max);
-            let curr_size = line.words.iter().map(|w| w.style.font_size).fold(0.0f64, f64::max);
-            let size_diff = (curr_size - prev_size).abs();
-
-            let prev_is_bold = prev.words.iter().all(|w| w.style.is_bold) && prev.words.len() <= 12;
-            let curr_is_bold = line.words.iter().all(|w| w.style.is_bold) && line.words.len() <= 12;
-
-            if starts_new_item {
+            let prev_is_toc = is_toc_line_entry(prev);
+            if line_is_toc || prev_is_toc || starts_new_item {
                 true
-            } else if size_diff >= 2.5 || (curr_is_bold && !prev_is_bold && gap >= 4.0) {
-                true
-            } else if !ends_sentence {
-                // Continuation line of a running sentence: never break into a new paragraph
-                // unless vertical gap is unmistakably large (section or block break)
-                gap >= 18.0
             } else {
-                // Sentence completed on previous line: break into new paragraph only if
-                // there is significant paragraph gap or first-line indentation
-                let is_indented = (line.bbox.x_min - prev.bbox.x_min).abs() >= 14.0;
-                gap >= 12.0 || gap >= (prev_h * 1.35) || (is_indented && gap >= 4.0)
+                let gap = line.bbox.y_min - prev.bbox.y_max;
+                let prev_h = prev.bbox.height().max(8.0);
+
+                let prev_last_word = prev.words.last().map(|w| w.text.trim()).unwrap_or("");
+                let ends_sentence = prev_last_word.ends_with('.')
+                    || prev_last_word.ends_with('?')
+                    || prev_last_word.ends_with('!')
+                    || prev_last_word.ends_with(':')
+                    || prev_last_word.ends_with(';')
+                    || prev_last_word.ends_with(".\"")
+                    || prev_last_word.ends_with("?'")
+                    || prev_last_word.ends_with("!'");
+
+                // Dominant font sizes
+                let prev_size = prev.words.iter().map(|w| w.style.font_size).fold(0.0f64, f64::max);
+                let curr_size = line.words.iter().map(|w| w.style.font_size).fold(0.0f64, f64::max);
+                let size_diff = (curr_size - prev_size).abs();
+
+                let prev_is_bold = prev.words.iter().all(|w| w.style.is_bold) && prev.words.len() <= 12;
+                let curr_is_bold = line.words.iter().all(|w| w.style.is_bold) && line.words.len() <= 12;
+
+                if size_diff >= 2.5 || (curr_is_bold && !prev_is_bold && gap >= 4.0) {
+                    true
+                } else if !ends_sentence {
+                    // Continuation line of a running sentence: never break into a new paragraph
+                    // unless vertical gap is unmistakably large (section or block break)
+                    gap >= 18.0
+                } else {
+                    // Sentence completed on previous line: break into new paragraph only if
+                    // there is significant paragraph gap or first-line indentation
+                    let is_indented = (line.bbox.x_min - prev.bbox.x_min).abs() >= 14.0;
+                    gap >= 12.0 || gap >= (prev_h * 1.35) || (is_indented && gap >= 4.0)
+                }
             }
         } else {
             false
@@ -505,6 +510,36 @@ fn assemble_paragraphs_from_words(mut words: Vec<Word>) -> Vec<ParagraphBlock> {
     }
 
     blocks
+}
+
+/// Identifies whether a TextLine is a Table of Contents (Daftar Isi) entry
+fn is_toc_line_entry(line: &TextLine) -> bool {
+    let full = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+    if full.contains("..") || full.contains("...") {
+        return true;
+    }
+    if line.words.len() >= 2 {
+        if let Some(last) = line.words.last() {
+            let t = last.text.trim().trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
+            let is_num = !t.is_empty() && (t.chars().all(|c| c.is_ascii_digit()) || is_roman_num(t));
+            if is_num {
+                let prev = &line.words[line.words.len() - 2];
+                if (last.bbox.x_min - prev.bbox.x_max) >= 20.0 || last.bbox.x_min >= 350.0 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_roman_num(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    let roman = [
+        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+        "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
+    ];
+    roman.contains(&lower.as_str())
 }
 
 fn build_para_block(lines: Vec<TextLine>) -> ParagraphBlock {

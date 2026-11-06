@@ -1010,7 +1010,34 @@ fn should_insert_page_break(
         return true;
     }
 
-    // 2. Intentional termination: Prev page terminated early (< 82% of page height)
+    // 2. Semantic Chapter / Major Section Boundary
+    // If the next page begins with a major heading (H1, H2, or named title like DAFTAR ISI, BAB) near the top of the page
+    if let Some(first_p) = curr_page.paragraphs.first() {
+        let first_text = first_p.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
+        let t_upper = first_text.trim().to_uppercase();
+
+        let is_major_section_title = t_upper == "DAFTAR ISI"
+            || t_upper.starts_with("DAFTAR ISI")
+            || t_upper.starts_with("TABLE OF CONTENTS")
+            || t_upper.starts_with("KATA PENGANTAR")
+            || t_upper.starts_with("LEMBAR PENGESAHAN")
+            || t_upper.starts_with("DAFTAR TABEL")
+            || t_upper.starts_with("DAFTAR GAMBAR")
+            || t_upper.starts_with("DAFTAR LAMPIRAN")
+            || t_upper.starts_with("DAFTAR PUSTAKA")
+            || t_upper.starts_with("REFERENCES")
+            || t_upper.starts_with("BIBLIOGRAPHY")
+            || t_upper.starts_with("BAB ")
+            || t_upper.starts_with("CHAPTER ")
+            || (first_p.is_header && (first_p.tag == "H1" || first_p.tag == "H2"))
+            || (first_p.alignment == "center" && first_p.lines.len() <= 2 && first_text.len() <= 60 && first_p.lines.iter().any(|l| l.words.iter().any(|w| w.style.is_bold)));
+
+        if is_major_section_title && first_p.bbox.y_min <= 160.0 {
+            return true;
+        }
+    }
+
+    // 3. Intentional termination: Prev page terminated early (< 82% of page height)
     // Examples: Thesis Cover, Lembar Pengesahan, Kata Pengantar, Daftar Isi, End of Chapter
     let mut prev_max_y = 0.0f64;
     for p in &prev_page.paragraphs {
@@ -1034,14 +1061,6 @@ fn should_insert_page_break(
     let is_short_termination = prev_max_y > 0.0 && prev_max_y < (prev_page.height_points * 0.82);
     if is_short_termination {
         return true;
-    }
-
-    // 3. Semantic Chapter / Major Section Boundary
-    // If the next page begins with a major heading (H1) near the top of the page
-    if let Some(first_p) = curr_page.paragraphs.first() {
-        if first_p.is_header && first_p.tag == "H1" && first_p.bbox.y_min <= 120.0 {
-            return true;
-        }
     }
 
     // Dense pages (>= 82% full) with continuing body text flow naturally in Word's layout engine

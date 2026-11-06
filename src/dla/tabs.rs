@@ -177,55 +177,119 @@ fn insert_tab_runs(line: &mut crate::models::TextLine) {
 
 /// Detects dot leaders in Table of Contents or single line references
 fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
-    if line.words.len() < 2 {
+    if line.words.is_empty() {
         return;
     }
 
-    // Check if any word is dots e.g. "....."
-    let dot_word_idx = line.words.iter().position(|w| {
-        w.text.len() >= 3 && w.text.chars().all(|c| c == '.' || c == ' ')
-    });
+    let full_line_text = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+    let has_dot_sequence = full_line_text.contains("..") || line.words.iter().any(|w| w.text.contains(".."));
 
-    if let Some(idx) = dot_word_idx {
-        if idx + 1 < line.words.len() {
-            let next_word = &line.words[idx + 1];
-            line.tab_stops.push(TabStop {
-                x_pos_points: next_word.bbox.x_min,
-                align_type: "right".to_string(),
-                is_leader_dot: true,
-            });
+    let last_word_raw = line.words.last().map(|w| w.text.trim()).unwrap_or("");
+    let clean_num = last_word_raw.trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
+    let is_digit_page_num = !clean_num.is_empty() && clean_num.chars().all(|c| c.is_ascii_digit());
+    let is_roman_page_num = is_roman_num_str(clean_num);
+    let ends_with_page_num = is_digit_page_num || is_roman_page_num;
 
-            // Build runs with tab
-            let mut left_text = Vec::new();
-            for i in 0..idx {
-                left_text.push(line.words[i].text.as_str());
+    let has_wide_jump = if line.words.len() >= 2 {
+        let last_w = line.words.last().unwrap();
+        let prev_w = &line.words[line.words.len() - 2];
+        (last_w.bbox.x_min - prev_w.bbox.x_max) >= 20.0 || last_w.bbox.x_min >= 350.0
+    } else {
+        false
+    };
+
+    if !has_dot_sequence && !(ends_with_page_num && has_wide_jump) {
+        return;
+    }
+
+    // Extract title words on the left, and page number on the right
+    let mut title_parts: Vec<String> = Vec::new();
+    let mut page_number = String::new();
+    let tab_x = line.words.last().map(|w| w.bbox.x_min).unwrap_or(500.0);
+
+    if ends_with_page_num {
+        page_number = clean_num.to_string();
+        for i in 0..line.words.len().saturating_sub(1) {
+            let w_text = line.words[i].text.trim();
+            let clean_w = w_text.trim_matches(|c: char| c == '.' || c == ' ');
+            if !clean_w.is_empty() {
+                title_parts.push(clean_w.to_string());
             }
-
-            let mut right_text = Vec::new();
-            for i in (idx + 1)..line.words.len() {
-                right_text.push(line.words[i].text.as_str());
+        }
+        // If last word had text before dots, e.g. "Data...11"
+        if let Some(pos) = last_word_raw.find("..") {
+            let prefix = last_word_raw[..pos].trim_matches(|c: char| c == '.' || c == ' ');
+            if !prefix.is_empty() && !prefix.chars().all(|c| c.is_ascii_digit()) {
+                title_parts.push(prefix.to_string());
             }
-
-            line.runs = vec![
-                TextRun {
-                    text: left_text.join(" "),
-                    style: line.words[0].style.clone(),
-                    is_tab: false,
-                    is_leader_dot: false,
-                },
-                TextRun {
-                    text: "\t".to_string(),
-                    style: line.words[0].style.clone(),
-                    is_tab: true,
-                    is_leader_dot: true,
-                },
-                TextRun {
-                    text: right_text.join(" "),
-                    style: line.words.last().unwrap().style.clone(),
-                    is_tab: false,
-                    is_leader_dot: false,
-                },
-            ];
+        }
+    } else if has_dot_sequence {
+        for w in &line.words {
+            let t = w.text.trim();
+            if t.contains("..") {
+                if let Some(pos) = t.find("..") {
+                    let left = t[..pos].trim_matches(|c: char| c == '.' || c == ' ');
+                    if !left.is_empty() {
+                        title_parts.push(left.to_string());
+                    }
+                }
+                if let Some(pos) = t.rfind("..") {
+                    let right = t[(pos + 2)..].trim_matches(|c: char| c == '.' || c == ' ');
+                    if !right.is_empty() && (right.chars().all(|c| c.is_ascii_digit()) || is_roman_num_str(right)) {
+                        page_number = right.to_string();
+                    }
+                }
+            } else if page_number.is_empty() {
+                let clean_w = t.trim_matches(|c: char| c == '.' || c == ' ');
+                if !clean_w.is_empty() {
+                    title_parts.push(clean_w.to_string());
+                }
+            }
         }
     }
+
+    let title = title_parts.join(" ");
+    if title.is_empty() {
+        return;
+    }
+
+    // Set tab stop with dot leader
+    line.tab_stops = vec![TabStop {
+        x_pos_points: tab_x.max(480.0),
+        align_type: "right".to_string(),
+        is_leader_dot: true,
+    }];
+
+    let base_style = line.words.first().map(|w| w.style.clone()).unwrap_or_default();
+    let num_style = line.words.last().map(|w| w.style.clone()).unwrap_or_else(|| base_style.clone());
+
+    line.runs = vec![
+        TextRun {
+            text: title,
+            style: base_style,
+            is_tab: false,
+            is_leader_dot: false,
+        },
+        TextRun {
+            text: "\t".to_string(),
+            style: num_style.clone(),
+            is_tab: true,
+            is_leader_dot: true,
+        },
+        TextRun {
+            text: page_number,
+            style: num_style,
+            is_tab: false,
+            is_leader_dot: false,
+        },
+    ];
+}
+
+fn is_roman_num_str(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    let roman = [
+        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+        "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
+    ];
+    roman.contains(&lower.as_str())
 }

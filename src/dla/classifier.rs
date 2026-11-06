@@ -257,8 +257,22 @@ fn classify_single_paragraph(p: &mut ParagraphBlock, median_body_size: f64, page
         || full_text.contains(".io")
         || full_text.contains("github.c");
 
-    if !is_url_or_link && p.lines.len() <= 2 && total_char_count < 100 {
-        if max_font_size >= 16.0 || max_font_size >= median_body_size * 1.35 {
+    let t_upper = full_text.trim().to_uppercase();
+    let is_major_structural_title = t_upper == "DAFTAR ISI"
+        || t_upper == "TABLE OF CONTENTS"
+        || t_upper == "KATA PENGANTAR"
+        || t_upper == "LEMBAR PENGESAHAN"
+        || t_upper == "DAFTAR TABEL"
+        || t_upper == "DAFTAR GAMBAR"
+        || t_upper == "DAFTAR LAMPIRAN"
+        || t_upper == "DAFTAR PUSTAKA"
+        || t_upper == "REFERENCES"
+        || t_upper == "BIBLIOGRAPHY"
+        || t_upper.starts_with("BAB ")
+        || t_upper.starts_with("CHAPTER ");
+
+    if is_major_structural_title || (!is_url_or_link && p.lines.len() <= 2 && total_char_count < 100) {
+        if is_major_structural_title || max_font_size >= 16.0 || max_font_size >= median_body_size * 1.35 {
             p.tag = "H1".to_string();
             p.is_header = true;
             p.space_before = 0.0;
