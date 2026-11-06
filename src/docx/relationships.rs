@@ -188,6 +188,17 @@ impl DocxRelationships {
                     crate::utils::escape_xml(u)
                 };
 
+                let page_field = if full_text.contains('/') {
+                    r#"    <w:fldSimple w:instr="PAGE"/>
+    <w:r>
+      <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
+      <w:t>/</w:t>
+    </w:r>
+    <w:fldSimple w:instr="NUMPAGES"/>"#
+                } else {
+                    r#"    <w:fldSimple w:instr="PAGE"/>"#
+                };
+
                 xml.push_str(&format!(
                     r#"  <w:p>
     <w:pPr>
@@ -202,16 +213,12 @@ impl DocxRelationships {
       <w:t xml:space="preserve">{}</w:t>
     </w:r>
     <w:r><w:tab/></w:r>
-    <w:fldSimple w:instr="PAGE"/>
-    <w:r>
-      <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
-      <w:t>/</w:t>
-    </w:r>
-    <w:fldSimple w:instr="NUMPAGES"/>
+{}
   </w:p>
 "#,
                     printable_width_twips,
-                    url_content
+                    url_content,
+                    page_field
                 ));
             } else {
                 // Pure page number: determine alignment (right vs center)

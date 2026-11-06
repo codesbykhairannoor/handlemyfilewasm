@@ -58,15 +58,19 @@ fn rxyc_banded(
                 if (first_cy - cy).abs() <= (h * 0.4) {
                     let line_min_x = line.iter().map(|item| item.bbox.x_min).fold(f64::INFINITY, f64::min);
                     let line_max_x = line.iter().map(|item| item.bbox.x_max).fold(f64::NEG_INFINITY, f64::max);
-                    let is_adjacent = if w.bbox.x_min >= line_max_x {
-                        (w.bbox.x_min - line_max_x) <= 7.0
+                    let is_gutter_gap = if w.bbox.x_min >= line_max_x {
+                        let gap = w.bbox.x_min - line_max_x;
+                        let gap_mid = (line_max_x + w.bbox.x_min) / 2.0;
+                        gap >= 16.0 && (gap_mid - center).abs() <= 50.0
                     } else if w.bbox.x_max <= line_min_x {
-                        (line_min_x - w.bbox.x_max) <= 7.0
+                        let gap = line_min_x - w.bbox.x_max;
+                        let gap_mid = (w.bbox.x_max + line_min_x) / 2.0;
+                        gap >= 16.0 && (gap_mid - center).abs() <= 50.0
                     } else {
-                        true
+                        false
                     };
 
-                    if is_adjacent {
+                    if !is_gutter_gap {
                         line.push(w.clone());
                         matched = true;
                         break;
@@ -197,7 +201,20 @@ fn rxyc_recursive(
 
             let is_colon_form = right_colon_count >= 1 || left_colon_count >= 2;
 
-            if is_colon_form {
+            // Check if cut_x separates items that share horizontal baselines (TOC or key-value rows)
+            let right_words: Vec<&Word> = words.iter().filter(|w| w.bbox.x_min >= cut_x).collect();
+            let left_words: Vec<&Word> = words.iter().filter(|w| w.bbox.x_max <= cut_x).collect();
+            let shared_rows = right_words.iter().filter(|rw| {
+                let r_cy = (rw.bbox.y_min + rw.bbox.y_max) / 2.0;
+                left_words.iter().any(|lw| {
+                    let l_cy = (lw.bbox.y_min + lw.bbox.y_max) / 2.0;
+                    (l_cy - r_cy).abs() <= 3.5
+                })
+            }).count();
+
+            let is_toc_or_tabular = shared_rows >= 2;
+
+            if is_colon_form || is_toc_or_tabular {
                 None
             } else {
                 Some((cut_x, gap_x))
@@ -513,15 +530,16 @@ fn assemble_paragraphs_from_words(mut words: Vec<Word>) -> Vec<ParagraphBlock> {
 }
 
 /// Identifies whether a TextLine is a Table of Contents (Daftar Isi) entry
-fn is_toc_line_entry(line: &TextLine) -> bool {
+pub fn is_toc_line_entry(line: &TextLine) -> bool {
     let full = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
-    if full.contains("..") || full.contains("...") {
+    let dot_count = full.chars().filter(|&c| c == '.').count();
+    if dot_count >= 3 && (full.contains("..") || full.contains("...")) {
         return true;
     }
     if line.words.len() >= 2 {
         if let Some(last) = line.words.last() {
             let t = last.text.trim().trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
-            let is_num = !t.is_empty() && (t.chars().all(|c| c.is_ascii_digit()) || is_roman_num(t));
+            let is_num = !t.is_empty() && t.len() <= 4 && (t.chars().all(|c| c.is_ascii_digit()) || is_roman_num(t));
             if is_num {
                 let prev = &line.words[line.words.len() - 2];
                 if (last.bbox.x_min - prev.bbox.x_max) >= 20.0 || last.bbox.x_min >= 350.0 {

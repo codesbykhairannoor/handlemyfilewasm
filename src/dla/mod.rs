@@ -230,28 +230,60 @@ fn stitch_cross_page_continuations(pages: &mut [DocumentPage]) {
 
 /// Identifies and filters static header/footer/page-number artifacts from body text
 fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
-    // 1. Identify recurring running header text at top of pages
-    let mut top_header_texts: Vec<String> = Vec::new();
-    if pages.len() > 1 {
-        let mut header_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for page in pages.iter() {
-            for p in &page.paragraphs {
-                if p.bbox.y_max <= 50.0 && p.lines.len() <= 1 {
-                    let text = get_paragraph_full_text(p);
-                    if text.len() >= 4 {
-                        *header_counts.entry(text).or_insert(0) += 1;
-                    }
+    let total_pages = pages.len();
+    if total_pages <= 1 {
+        // Single-page documents have NO running headers or footers! All text is body content.
+        return;
+    }
+
+    // Minimum occurrences required for text to be considered a running header or footer.
+    // For 2-3 pages: must appear on at least 2 pages.
+    // For 4+ pages: must appear on at least 3 pages OR >= 25% of pages.
+    let min_recur_count = if total_pages <= 3 { 2 } else { 3.max((total_pages as f64 * 0.25) as usize) };
+
+    // 1. Identify recurring running header text at top of pages (y_max <= 50.0)
+    let mut top_header_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for page in pages.iter() {
+        for p in &page.paragraphs {
+            if p.bbox.y_max <= 50.0 && p.lines.len() <= 2 {
+                let text = get_paragraph_full_text(p);
+                if text.len() >= 4 {
+                    *top_header_counts.entry(text).or_insert(0) += 1;
                 }
             }
         }
-        for (text, count) in header_counts {
-            if count >= 2 {
-                top_header_texts.push(text);
+    }
+    let valid_top_headers: Vec<String> = top_header_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= min_recur_count)
+        .map(|(text, _)| text)
+        .collect();
+
+    // 2. Identify recurring running footer text at bottom of pages (y_min >= page_h - 55.0)
+    let mut bottom_footer_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut page_num_bottom_count = 0;
+    for page in pages.iter() {
+        let page_h = page.height_points;
+        for p in &page.paragraphs {
+            if (p.bbox.y_min >= (page_h - 55.0) || (p.bbox.y_min + p.bbox.y_max) / 2.0 >= (page_h - 45.0)) && p.lines.len() <= 2 {
+                let text = get_paragraph_full_text(p);
+                if is_page_number_pattern(&text) {
+                    page_num_bottom_count += 1;
+                } else if text.len() >= 4 {
+                    *bottom_footer_counts.entry(text).or_insert(0) += 1;
+                }
             }
         }
     }
+    let valid_bottom_footers: Vec<String> = bottom_footer_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= min_recur_count)
+        .map(|(text, _)| text)
+        .collect();
+    let recurring_bottom_page_nums = page_num_bottom_count >= min_recur_count;
 
-    // 2. Extract and remove headers and footers from body paragraphs
+    // 3. Extract ONLY confirmed recurring headers and footers from body paragraphs.
+    // If text does NOT match confirmed recurring headers/footers, it MUST REMAIN in the body!
     for page in pages.iter_mut() {
         let page_h = page.height_points;
 
@@ -267,32 +299,33 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
 
             let cy = (p.bbox.y_min + p.bbox.y_max) / 2.0;
 
-            // Header Zone: top margin strip (y_max <= 45.0)
-            let is_in_top_strip = (p.bbox.y_max <= 45.0 || cy <= 40.0) && p.bbox.y_min < (page_h * 0.35);
-            let is_recurring_header = p.bbox.y_max <= 50.0 && p.bbox.y_min < (page_h * 0.35) && top_header_texts.iter().any(|h| h == &full_text);
+            // Only extract as header if it matches a confirmed recurring header
+            let is_recurring_header = !valid_top_headers.is_empty()
+                && p.bbox.y_max <= 55.0
+                && p.lines.len() <= 2
+                && valid_top_headers.iter().any(|h| h == &full_text);
 
-            if (is_in_top_strip || is_recurring_header) && p.lines.len() <= 2 {
+            if is_recurring_header {
                 header_blocks.push(p);
-                continue; // Remove from body!
+                continue;
             }
 
-            // Standalone page number (digits, "1/8", roman numerals)
+            // Standalone page number
             let is_standalone_num = is_page_number_pattern(&full_text) && p.lines.len() <= 1;
 
-            // Footer Zone: bottom margin strip (y_min >= page_h - 45.0)
-            let is_in_bottom_strip = (p.bbox.y_min >= (page_h - 45.0) || cy >= (page_h - 40.0)) && p.bbox.y_min >= (page_h * 0.65);
-            let is_bottom_page_num = is_standalone_num && (cy >= (page_h - 60.0) || cy >= (page_h * 0.85));
+            // Only extract as footer if it matches a confirmed recurring footer or recurring page number
+            let is_recurring_footer_text = !valid_bottom_footers.is_empty()
+                && (p.bbox.y_min >= (page_h - 55.0) || cy >= (page_h - 45.0))
+                && p.lines.len() <= 2
+                && valid_bottom_footers.iter().any(|f| f == &full_text);
 
-            if (is_in_bottom_strip || is_bottom_page_num) && p.lines.len() <= 2 {
+            let is_recurring_page_num = recurring_bottom_page_nums
+                && is_standalone_num
+                && (p.bbox.y_min >= (page_h - 60.0) || cy >= (page_h - 50.0));
+
+            if is_recurring_footer_text || is_recurring_page_num {
                 footer_blocks.push(p);
-                continue; // Remove from body!
-            }
-
-            // Top-right standalone page number (e.g. thesis header page number)
-            let is_top_page_num = is_standalone_num && (cy <= 45.0 || p.bbox.y_max <= 40.0) && p.bbox.y_min < (page_h * 0.35);
-            if is_top_page_num {
-                header_blocks.push(p);
-                continue; // Remove from body!
+                continue;
             }
 
             kept_paragraphs.push(p);
@@ -609,9 +642,20 @@ fn deduplicate_page_tables(tables: &mut Vec<crate::models::TableMatrix>) {
 
 /// Detects 2-column layout and assigns column_index (0 for left, 1 for right)
 fn assign_paragraph_column_indices(page: &mut DocumentPage) {
-    if page.paragraphs.len() < 2 {
+    if page.paragraphs.len() < 8 {
         return;
     }
+
+    // A Table of Contents page is ALWAYS single-column (never partition into columns!)
+    let has_toc_indicators = page.paragraphs.iter().any(|p| {
+        p.lines.iter().any(|l| {
+            l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l)
+        })
+    });
+    if has_toc_indicators {
+        return;
+    }
+
     let w = page.width_points;
     let x_mid = w / 2.0;
 
@@ -619,22 +663,23 @@ fn assign_paragraph_column_indices(page: &mut DocumentPage) {
     let mut right_count = 0;
 
     for p in &page.paragraphs {
-        if p.bbox.width() <= (w * 0.60) {
-            if p.bbox.x_max <= (x_mid + 12.0) {
+        if p.bbox.width() <= (w * 0.48) {
+            if p.bbox.x_max <= (x_mid + 8.0) {
                 left_count += 1;
-            } else if p.bbox.x_min >= (x_mid - 12.0) {
+            } else if p.bbox.x_min >= (x_mid - 8.0) {
                 right_count += 1;
             }
         }
     }
 
-    if left_count >= 2 && right_count >= 2 {
+    // Require substantial paragraphs on BOTH columns (at least 5 on each side)
+    if left_count >= 5 && right_count >= 5 {
         for p in page.paragraphs.iter_mut() {
             let cx = (p.bbox.x_min + p.bbox.x_max) / 2.0;
-            if p.bbox.width() >= (w * 0.62) || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0)) {
+            if p.bbox.width() >= (w * 0.55) || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0)) {
                 // Spanning paragraph (Title, Abstract banner, full-width figure caption)
                 p.column_index = 0;
-            } else if cx >= x_mid || p.bbox.x_min >= (x_mid - 10.0) {
+            } else if cx >= x_mid || p.bbox.x_min >= (x_mid - 8.0) {
                 p.column_index = 1;
             } else {
                 p.column_index = 0;

@@ -30,8 +30,11 @@ impl DocxDocumentBuilder {
   <w:body>
 "#);
 
-        let has_header = pages.iter().any(|p| p.header.is_some());
-        let has_footer = pages.iter().any(|p| p.footer.is_some());
+        let header_count = pages.iter().filter(|p| p.header.is_some()).count();
+        let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
+        let min_pages_for_hf = if pages.len() <= 3 { 2 } else { 3 };
+        let has_header = header_count >= min_pages_for_hf;
+        let has_footer = footer_count >= min_pages_for_hf;
 
         // Section Properties: Dominant / Median Page Margins
         let mut left_margins: Vec<f64> = pages.iter().map(|p| p.margin_left_points).filter(|&m| m > 10.0).collect();
@@ -54,8 +57,6 @@ impl DocxDocumentBuilder {
         let top_twips = points_to_twips(top_pts);
         let bottom_twips = points_to_twips(bottom_pts);
 
-
-
         let mut last_page_w = 11906; // Default A4 in twips
         let mut last_page_h = 16838;
 
@@ -65,22 +66,28 @@ impl DocxDocumentBuilder {
         let mut has_emitted_first_multi_col_sect = false;
 
         // A true multi-column document (e.g. IEEE/ACM academic paper, journal article):
-        // 1. Must have substantial columnar paragraphs across multiple pages (>= 4 paragraphs in Col 1 per page)
+        // 1. Must have substantial columnar paragraphs across multiple pages (>= 5 paragraphs in Col 1 per page)
         // 2. Must NOT be a table-dominated document (which requires full-width 1-column layout)
+        // 3. Must span across at least 35% of the total document pages
         let has_dominant_wide_tables = pages.iter().any(|p| {
             p.tables.iter().any(|t| t.cells.iter().any(|row| row.len() >= 5))
         });
 
         let multi_col_page_count = pages.iter().filter(|p| {
-            p.paragraphs.iter().filter(|para| para.column_index == 1).count() >= 4
+            p.paragraphs.iter().filter(|para| para.column_index == 1).count() >= 5
         }).count();
 
         let is_doc_multi_column = !has_dominant_wide_tables
-            && (multi_col_page_count >= 2 || (pages.len() == 1 && multi_col_page_count == 1));
+            && pages.len() > 1
+            && (multi_col_page_count as f64 / pages.len() as f64) >= 0.35;
 
         for page in pages.iter() {
             last_page_w = points_to_twips(page.width_points);
             last_page_h = points_to_twips(page.height_points);
+
+            let page_left_pts = if page.margin_left_points > 10.0 { page.margin_left_points } else { left_pts };
+            let page_right_pts = if page.margin_right_points > 10.0 { page.margin_right_points } else { right_pts };
+            let printable_w_pts = (page.width_points - page_left_pts - page_right_pts).max(100.0);
 
             // Separate background graphics from inline content graphics
             let mut bg_graphics = Vec::new();
@@ -125,7 +132,12 @@ impl DocxDocumentBuilder {
             render_background_graphics_container(&mut xml, &bg_graphics, 4);
 
             // 2. Check if this page is a Multi-Column page
-            let is_page_multi_column = is_doc_multi_column && page.paragraphs.iter().filter(|p| p.column_index == 1).count() >= 3;
+            let page_has_toc = page.paragraphs.iter().any(|p| {
+                p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l))
+            });
+            let is_page_multi_column = is_doc_multi_column
+                && !page_has_toc
+                && page.paragraphs.iter().filter(|p| p.column_index == 1).count() >= 5;
 
             enum PageItem<'a> {
                 Para(&'a ParagraphBlock),
@@ -193,7 +205,7 @@ impl DocxDocumentBuilder {
                 if !spanning_items.is_empty() {
                     for item in spanning_items {
                         match item {
-                            PageItem::Para(p) => render_paragraph(&mut xml, p, 4),
+                            PageItem::Para(p) => render_paragraph(&mut xml, p, printable_w_pts, page_left_pts, 4),
                             PageItem::Table(t) => render_table(&mut xml, t, 4),
                             PageItem::Graphic(g, img_idx) => render_graphic(&mut xml, g, img_idx, page.width_points, left_pts, right_pts, 4),
                         }
@@ -217,7 +229,8 @@ impl DocxDocumentBuilder {
                         r#"    <w:p>
       <w:pPr>
         <w:sectPr>
-{}{}{}{}          <w:cols w:num="1" w:space="720"/>
+{}{}{}{}          <w:titlePg/>
+          <w:cols w:num="1" w:space="720"/>
         </w:sectPr>
       </w:pPr>
     </w:p>
@@ -259,10 +272,12 @@ impl DocxDocumentBuilder {
                     ya.partial_cmp(&yb).unwrap_or(std::cmp::Ordering::Equal)
                 });
 
+                let col_w = (printable_w_pts - 18.0) / 2.0;
+
                 // Render Column 0 (Left Column)
                 for item in col0_items {
                     match item {
-                        PageItem::Para(p) => render_paragraph(&mut xml, p, 4),
+                        PageItem::Para(p) => render_paragraph(&mut xml, p, col_w, page_left_pts, 4),
                         PageItem::Table(t) => render_table(&mut xml, t, 4),
                         PageItem::Graphic(g, img_idx) => render_graphic(&mut xml, g, img_idx, page.width_points, left_pts, right_pts, 4),
                     }
@@ -281,7 +296,7 @@ impl DocxDocumentBuilder {
                 // Render Column 1 (Right Column)
                 for item in col1_items {
                     match item {
-                        PageItem::Para(p) => render_paragraph(&mut xml, p, 4),
+                        PageItem::Para(p) => render_paragraph(&mut xml, p, col_w, page_left_pts + col_w + 18.0, 4),
                         PageItem::Table(t) => render_table(&mut xml, t, 4),
                         PageItem::Graphic(g, img_idx) => render_graphic(&mut xml, g, img_idx, page.width_points, left_pts, right_pts, 4),
                     }
@@ -319,7 +334,7 @@ impl DocxDocumentBuilder {
 
                 for item in items {
                     match item {
-                        PageItem::Para(p) => render_paragraph(&mut xml, p, 4),
+                        PageItem::Para(p) => render_paragraph(&mut xml, p, printable_w_pts, page_left_pts, 4),
                         PageItem::Table(t) => render_table(&mut xml, t, 4),
                         PageItem::Graphic(g, img_idx) => render_graphic(&mut xml, g, img_idx, page.width_points, left_pts, right_pts, 4),
                     }
@@ -357,6 +372,7 @@ impl DocxDocumentBuilder {
             r#"    <w:sectPr>
 {}{}      <w:pgSz w:w="{}" w:h="{}"/>
       <w:pgMar w:top="{}" w:right="{}" w:bottom="{}" w:left="{}" w:header="360" w:footer="360" w:gutter="0"/>
+      <w:titlePg/>
 {}    </w:sectPr>
   </w:body>
 </w:document>"#,
@@ -368,7 +384,13 @@ impl DocxDocumentBuilder {
 }
 
 /// Renders a single `<w:p>` paragraph block with styles, tab stops, and runs
-fn render_paragraph(xml: &mut String, p: &ParagraphBlock, indent: usize) {
+fn render_paragraph(
+    xml: &mut String,
+    p: &ParagraphBlock,
+    printable_w_pts: f64,
+    left_margin_pts: f64,
+    indent: usize,
+) {
     let ind = " ".repeat(indent);
 
     xml.push_str(&format!("{}<w:p>\n", ind));
@@ -410,7 +432,11 @@ fn render_paragraph(xml: &mut String, p: &ParagraphBlock, indent: usize) {
     if !all_tab_stops.is_empty() {
         xml.push_str(&format!("{}    <w:tabs>\n", ind));
         for ts in all_tab_stops {
-            let pos_twips = points_to_twips(ts.x_pos_points);
+            let pos_twips = if ts.is_leader_dot || ts.align_type == "right" {
+                points_to_twips(printable_w_pts)
+            } else {
+                points_to_twips((ts.x_pos_points - left_margin_pts).max(0.0))
+            };
             let align_val = match ts.align_type.as_str() {
                 "right" => "right",
                 "center" => "center",

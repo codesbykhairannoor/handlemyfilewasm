@@ -56,8 +56,11 @@ impl DocxWriter {
             }
         }
 
-        let has_header = pages.iter().any(|p| p.header.is_some());
-        let has_footer = pages.iter().any(|p| p.footer.is_some());
+        let header_count = pages.iter().filter(|p| p.header.is_some()).count();
+        let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
+        let min_pages_for_hf = if pages.len() <= 3 { 2 } else { 3 };
+        let has_header = header_count >= min_pages_for_hf;
+        let has_footer = footer_count >= min_pages_for_hf;
         let header_p = pages
             .iter()
             .filter_map(|p| p.header.as_ref())

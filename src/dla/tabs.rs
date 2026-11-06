@@ -182,69 +182,37 @@ fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
     }
 
     let full_line_text = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
-    let has_dot_sequence = full_line_text.contains("..") || line.words.iter().any(|w| w.text.contains(".."));
+    let dot_count = full_line_text.chars().filter(|&c| c == '.').count();
+    let has_dot_sequence = dot_count >= 3 && (full_line_text.contains("...") || full_line_text.contains(". . .") || full_line_text.contains(".."));
 
     let last_word_raw = line.words.last().map(|w| w.text.trim()).unwrap_or("");
     let clean_num = last_word_raw.trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
-    let is_digit_page_num = !clean_num.is_empty() && clean_num.chars().all(|c| c.is_ascii_digit());
+    let is_digit_page_num = !clean_num.is_empty() && clean_num.len() <= 4 && clean_num.chars().all(|c| c.is_ascii_digit());
     let is_roman_page_num = is_roman_num_str(clean_num);
     let ends_with_page_num = is_digit_page_num || is_roman_page_num;
 
-    let has_wide_jump = if line.words.len() >= 2 {
-        let last_w = line.words.last().unwrap();
-        let prev_w = &line.words[line.words.len() - 2];
-        (last_w.bbox.x_min - prev_w.bbox.x_max) >= 20.0 || last_w.bbox.x_min >= 350.0
-    } else {
-        false
-    };
-
-    if !has_dot_sequence && !(ends_with_page_num && has_wide_jump) {
+    // Strict invariant: Must have an actual dot sequence AND end with a valid page number (1..4 digits or roman)
+    // Never turn non-dotted lines (e.g. Student ID, dates, dashes) into dot leaders!
+    if !has_dot_sequence || !ends_with_page_num {
         return;
     }
 
     // Extract title words on the left, and page number on the right
     let mut title_parts: Vec<String> = Vec::new();
-    let mut page_number = String::new();
-    let tab_x = line.words.last().map(|w| w.bbox.x_min).unwrap_or(500.0);
+    let page_number = clean_num.to_string();
 
-    if ends_with_page_num {
-        page_number = clean_num.to_string();
-        for i in 0..line.words.len().saturating_sub(1) {
-            let w_text = line.words[i].text.trim();
-            let clean_w = w_text.trim_matches(|c: char| c == '.' || c == ' ');
-            if !clean_w.is_empty() {
-                title_parts.push(clean_w.to_string());
-            }
+    for i in 0..line.words.len().saturating_sub(1) {
+        let w_text = line.words[i].text.trim();
+        let clean_w = w_text.trim_matches(|c: char| c == '.' || c == ' ');
+        if !clean_w.is_empty() {
+            title_parts.push(clean_w.to_string());
         }
-        // If last word had text before dots, e.g. "Data...11"
-        if let Some(pos) = last_word_raw.find("..") {
-            let prefix = last_word_raw[..pos].trim_matches(|c: char| c == '.' || c == ' ');
-            if !prefix.is_empty() && !prefix.chars().all(|c| c.is_ascii_digit()) {
-                title_parts.push(prefix.to_string());
-            }
-        }
-    } else if has_dot_sequence {
-        for w in &line.words {
-            let t = w.text.trim();
-            if t.contains("..") {
-                if let Some(pos) = t.find("..") {
-                    let left = t[..pos].trim_matches(|c: char| c == '.' || c == ' ');
-                    if !left.is_empty() {
-                        title_parts.push(left.to_string());
-                    }
-                }
-                if let Some(pos) = t.rfind("..") {
-                    let right = t[(pos + 2)..].trim_matches(|c: char| c == '.' || c == ' ');
-                    if !right.is_empty() && (right.chars().all(|c| c.is_ascii_digit()) || is_roman_num_str(right)) {
-                        page_number = right.to_string();
-                    }
-                }
-            } else if page_number.is_empty() {
-                let clean_w = t.trim_matches(|c: char| c == '.' || c == ' ');
-                if !clean_w.is_empty() {
-                    title_parts.push(clean_w.to_string());
-                }
-            }
+    }
+    // If last word had text before dots, e.g. "Data...11"
+    if let Some(pos) = last_word_raw.find("..") {
+        let prefix = last_word_raw[..pos].trim_matches(|c: char| c == '.' || c == ' ');
+        if !prefix.is_empty() && !prefix.chars().all(|c| c.is_ascii_digit()) {
+            title_parts.push(prefix.to_string());
         }
     }
 
@@ -253,9 +221,9 @@ fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
         return;
     }
 
-    // Set tab stop with dot leader
+    // Set tab stop with dot leader (pos will be set to exact printable_width in OOXML emitter)
     line.tab_stops = vec![TabStop {
-        x_pos_points: tab_x.max(480.0),
+        x_pos_points: 0.0,
         align_type: "right".to_string(),
         is_leader_dot: true,
     }];
