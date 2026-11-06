@@ -63,7 +63,7 @@ impl DocxRelationships {
     }
 
     /// Generates word/header1.xml preserving document running header
-    pub fn header(header_p: Option<&crate::models::ParagraphBlock>) -> String {
+    pub fn header(header_p: Option<&crate::models::ParagraphBlock>, printable_width_twips: u32) -> String {
         let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 "#);
@@ -93,44 +93,28 @@ impl DocxRelationships {
             }
 
             if saw_tab && !right_text.is_empty() {
-                // Dual header (left date + right title) via 100% width borderless table
+                // Dual header (left date + right title) via native Word right tab stop
                 xml.push_str(&format!(
-                    r#"  <w:tbl>
-    <w:tblPr>
-      <w:tblW w:w="5000" w:type="pct"/>
-      <w:tblBorders>
-        <w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-      </w:tblBorders>
-      <w:tblCellMar>
-        <w:top w:w="0" w:type="dxa"/>
-        <w:left w:w="0" w:type="dxa"/>
-        <w:bottom w:w="0" w:type="dxa"/>
-        <w:right w:w="0" w:type="dxa"/>
-      </w:tblCellMar>
-    </w:tblPr>
-    <w:tr>
-      <w:tc>
-        <w:tcPr><w:tcW w:w="1800" w:type="pct"/></w:tcPr>
-        <w:p>
-          <w:pPr><w:pStyle w:val="Header"/><w:jc w:val="left"/></w:pPr>
-          <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
-        </w:p>
-      </w:tc>
-      <w:tc>
-        <w:tcPr><w:tcW w:w="3200" w:type="pct"/></w:tcPr>
-        <w:p>
-          <w:pPr><w:pStyle w:val="Header"/><w:jc w:val="right"/></w:pPr>
-          <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
-        </w:p>
-      </w:tc>
-    </w:tr>
-  </w:tbl>
+                    r#"  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header"/>
+      <w:tabs>
+        <w:tab w:val="right" w:leader="none" w:pos="{}"/>
+      </w:tabs>
+      <w:jc w:val="left"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
+      <w:t xml:space="preserve">{}</w:t>
+    </w:r>
+    <w:r><w:tab/></w:r>
+    <w:r>
+      <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
+      <w:t xml:space="preserve">{}</w:t>
+    </w:r>
+  </w:p>
 "#,
+                    printable_width_twips,
                     crate::utils::escape_xml(&left_text),
                     crate::utils::escape_xml(&right_text)
                 ));
@@ -157,7 +141,7 @@ impl DocxRelationships {
     }
 
     /// Generates word/footer1.xml matching original footer alignment and content
-    pub fn footer(footer_p: Option<&crate::models::ParagraphBlock>) -> String {
+    pub fn footer(footer_p: Option<&crate::models::ParagraphBlock>, printable_width_twips: u32) -> String {
         let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 "#);
@@ -193,54 +177,40 @@ impl DocxRelationships {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            let is_multi_element = saw_tab || full_text.contains("http://") || full_text.contains("https://");
+            let has_url = full_text.contains("http://") || full_text.contains("https://");
 
-            if is_multi_element {
-                // Dual footer (left URL + right page number) via 100% width borderless table
-                // Never wraps or misaligns regardless of URL length
+            if has_url || (saw_tab && !left_text.is_empty() && !right_text.is_empty()) {
+                // Dual footer (left URL + right dynamic page number) via native Word right tab stop
                 let url_content = if !left_text.is_empty() {
                     crate::utils::escape_xml(&left_text)
                 } else {
-                    crate::utils::escape_xml(&full_text)
+                    let u = full_text.split_whitespace().next().unwrap_or(&full_text);
+                    crate::utils::escape_xml(u)
                 };
 
                 xml.push_str(&format!(
-                    r#"  <w:tbl>
-    <w:tblPr>
-      <w:tblW w:w="5000" w:type="pct"/>
-      <w:tblBorders>
-        <w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-        <w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>
-      </w:tblBorders>
-      <w:tblCellMar>
-        <w:top w:w="0" w:type="dxa"/>
-        <w:left w:w="0" w:type="dxa"/>
-        <w:bottom w:w="0" w:type="dxa"/>
-        <w:right w:w="0" w:type="dxa"/>
-      </w:tblCellMar>
-    </w:tblPr>
-    <w:tr>
-      <w:tc>
-        <w:tcPr><w:tcW w:w="4200" w:type="pct"/></w:tcPr>
-        <w:p>
-          <w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="left"/></w:pPr>
-          <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
-        </w:p>
-      </w:tc>
-      <w:tc>
-        <w:tcPr><w:tcW w:w="800" w:type="pct"/></w:tcPr>
-        <w:p>
-          <w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="right"/></w:pPr>
-          <w:fldSimple w:instr="PAGE"/><w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t>/</w:t></w:r><w:fldSimple w:instr="NUMPAGES"/>
-        </w:p>
-      </w:tc>
-    </w:tr>
-  </w:tbl>
+                    r#"  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:tabs>
+        <w:tab w:val="right" w:leader="none" w:pos="{}"/>
+      </w:tabs>
+      <w:jc w:val="left"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
+      <w:t xml:space="preserve">{}</w:t>
+    </w:r>
+    <w:r><w:tab/></w:r>
+    <w:fldSimple w:instr="PAGE"/>
+    <w:r>
+      <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
+      <w:t>/</w:t>
+    </w:r>
+    <w:fldSimple w:instr="NUMPAGES"/>
+  </w:p>
 "#,
+                    printable_width_twips,
                     url_content
                 ));
             } else {

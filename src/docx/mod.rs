@@ -67,6 +67,13 @@ impl DocxWriter {
             .filter_map(|p| p.footer.as_ref())
             .max_by_key(|p| p.lines.iter().map(|l| l.runs.len()).sum::<usize>());
 
+        // Dominant margins and page width for exact tab stop alignment:
+        let dominant_w = pages.first().map(|p| p.width_points).unwrap_or(595.0);
+        let left_pts = pages.iter().map(|p| p.margin_left_points).find(|&m| m > 10.0).unwrap_or(54.0);
+        let right_pts = pages.iter().map(|p| p.margin_right_points).find(|&m| m > 10.0).unwrap_or(54.0);
+        let printable_width_pts = (dominant_w - left_pts - right_pts).max(200.0);
+        let printable_width_twips = crate::utils::points_to_twips(printable_width_pts) as u32;
+
         // 1. [Content_Types].xml
         zip.start_file("[Content_Types].xml", options)
             .map_err(|e| format!("Failed to create [Content_Types].xml: {}", e))?;
@@ -107,7 +114,7 @@ impl DocxWriter {
         if has_header {
             zip.start_file("word/header1.xml", options)
                 .map_err(|e| format!("Failed to create word/header1.xml: {}", e))?;
-            zip.write_all(DocxRelationships::header(header_p).as_bytes())
+            zip.write_all(DocxRelationships::header(header_p, printable_width_twips).as_bytes())
                 .map_err(|e| format!("Failed to write word/header1.xml: {}", e))?;
         }
 
@@ -115,7 +122,7 @@ impl DocxWriter {
         if has_footer {
             zip.start_file("word/footer1.xml", options)
                 .map_err(|e| format!("Failed to create word/footer1.xml: {}", e))?;
-            zip.write_all(DocxRelationships::footer(footer_p).as_bytes())
+            zip.write_all(DocxRelationships::footer(footer_p, printable_width_twips).as_bytes())
                 .map_err(|e| format!("Failed to write word/footer1.xml: {}", e))?;
         }
 

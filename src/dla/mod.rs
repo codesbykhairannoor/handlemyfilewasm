@@ -267,9 +267,9 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
 
             let cy = (p.bbox.y_min + p.bbox.y_max) / 2.0;
 
-            // Header Zone: STRICTLY top margin strip (y_max <= 35.0)
-            let is_in_top_strip = (p.bbox.y_max <= 35.0 || cy <= 30.0) && p.bbox.y_min < (page_h * 0.35);
-            let is_recurring_header = p.bbox.y_max <= 40.0 && p.bbox.y_min < (page_h * 0.35) && top_header_texts.iter().any(|h| h == &full_text);
+            // Header Zone: top margin strip (y_max <= 45.0)
+            let is_in_top_strip = (p.bbox.y_max <= 45.0 || cy <= 40.0) && p.bbox.y_min < (page_h * 0.35);
+            let is_recurring_header = p.bbox.y_max <= 50.0 && p.bbox.y_min < (page_h * 0.35) && top_header_texts.iter().any(|h| h == &full_text);
 
             if (is_in_top_strip || is_recurring_header) && p.lines.len() <= 2 {
                 header_blocks.push(p);
@@ -279,9 +279,9 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
             // Standalone page number (digits, "1/8", roman numerals)
             let is_standalone_num = is_page_number_pattern(&full_text) && p.lines.len() <= 1;
 
-            // Footer Zone: STRICTLY bottom margin strip (y_min >= page_h - 35.0)
-            let is_in_bottom_strip = (p.bbox.y_min >= (page_h - 35.0) || cy >= (page_h - 30.0)) && p.bbox.y_min >= (page_h * 0.65);
-            let is_bottom_page_num = is_standalone_num && cy >= (page_h - 45.0) && p.bbox.y_min >= (page_h * 0.65);
+            // Footer Zone: bottom margin strip (y_min >= page_h - 45.0)
+            let is_in_bottom_strip = (p.bbox.y_min >= (page_h - 45.0) || cy >= (page_h - 40.0)) && p.bbox.y_min >= (page_h * 0.65);
+            let is_bottom_page_num = is_standalone_num && (cy >= (page_h - 60.0) || cy >= (page_h * 0.85));
 
             if (is_in_bottom_strip || is_bottom_page_num) && p.lines.len() <= 2 {
                 footer_blocks.push(p);

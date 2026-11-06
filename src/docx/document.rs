@@ -46,8 +46,8 @@ impl DocxDocumentBuilder {
 
         let left_pts = if !left_margins.is_empty() { left_margins[left_margins.len() / 2] } else { 72.0 };
         let right_pts = if !right_margins.is_empty() { right_margins[right_margins.len() / 2] } else { 72.0 };
-        let top_pts = if !top_margins.is_empty() { top_margins[top_margins.len() / 2] } else { 72.0 };
-        let bottom_pts = if !bottom_margins.is_empty() { bottom_margins[bottom_margins.len() / 2] } else { 72.0 };
+        let top_pts = if !top_margins.is_empty() { top_margins[top_margins.len() / 2].max(54.0) } else { 54.0 };
+        let bottom_pts = if !bottom_margins.is_empty() { bottom_margins[bottom_margins.len() / 2].max(54.0) } else { 54.0 };
 
         let left_twips = points_to_twips(left_pts);
         let right_twips = points_to_twips(right_pts);
@@ -225,7 +225,7 @@ impl DocxDocumentBuilder {
                         hdr_ref_break,
                         ftr_ref_break,
                         format!("          <w:pgSz w:w=\"{}\" w:h=\"{}\"/>\n", last_page_w, last_page_h),
-                        format!("          <w:pgMar w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/>\n", top_twips, right_twips, bottom_twips, left_twips)
+                        format!("          <w:pgMar w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\" w:header=\"360\" w:footer=\"360\" w:gutter=\"0\"/>\n", top_twips, right_twips, bottom_twips, left_twips)
                     ));
                     has_emitted_first_multi_col_sect = true;
                 }
@@ -356,7 +356,7 @@ impl DocxDocumentBuilder {
         xml.push_str(&format!(
             r#"    <w:sectPr>
 {}{}      <w:pgSz w:w="{}" w:h="{}"/>
-      <w:pgMar w:top="{}" w:right="{}" w:bottom="{}" w:left="{}" w:header="720" w:footer="720" w:gutter="0"/>
+      <w:pgMar w:top="{}" w:right="{}" w:bottom="{}" w:left="{}" w:header="360" w:footer="360" w:gutter="0"/>
 {}    </w:sectPr>
   </w:body>
 </w:document>"#,
@@ -992,9 +992,12 @@ fn render_graphic(
 }
 
 /// Determines whether an explicit page break is needed between two consecutive pages.
-/// Enforces 1:1 page boundary mapping between PDF pages so each physical PDF page
-/// (Cover, Lembar Pengesahan, Kata Pengantar, Daftar Isi, Chapters, etc.) maps to its
-/// own distinct page in Word, unless prev_page ends with an uncompleted run-on sentence.
+/// Enforces intentional page break preservation:
+/// 1. Short preliminary / section-ending pages (Cover, Pengesahan, Kata Pengantar, Daftar Isi, Chapter ends)
+///    where content terminated early (< 82% of page height).
+/// 2. Major section starts where the next page begins with an H1 heading near the top.
+/// 3. Orientation changes (Portrait <-> Landscape).
+/// Dense pages (>= 82% full) flow naturally in Word without creating single-line orphaned pages.
 fn should_insert_page_break(
     prev_page: &DocumentPage,
     curr_page: &DocumentPage,
@@ -1007,31 +1010,41 @@ fn should_insert_page_break(
         return true;
     }
 
-    // 2. Check if prev_page was split mid-sentence across dense body text
-    if let (Some(last_p), Some(first_p)) = (prev_page.paragraphs.last(), curr_page.paragraphs.first()) {
-        let last_text = last_p.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
-        let first_text = first_p.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
-        let trimmed_last = last_text.trim();
-        let trimmed_first = first_text.trim();
-
-        let ends_with_punct = trimmed_last.ends_with('.')
-            || trimmed_last.ends_with(':')
-            || trimmed_last.ends_with('?')
-            || trimmed_last.ends_with('!')
-            || trimmed_last.ends_with(';');
-
-        let first_char = trimmed_first.chars().next().unwrap_or('A');
-        let is_mid_sentence = !ends_with_punct && first_char.is_lowercase() && !first_p.is_header && !last_p.is_header;
-
-        // If it's a dense page ending mid-sentence that continues in lowercase, let Word flow it
-        let prev_max_y = prev_page.paragraphs.iter().map(|p| p.bbox.y_max).fold(0.0f64, f64::max);
-        let is_prev_dense = prev_max_y >= (prev_page.height_points - 55.0);
-        if is_mid_sentence && is_prev_dense {
-            return false;
+    // 2. Intentional termination: Prev page terminated early (< 82% of page height)
+    // Examples: Thesis Cover, Lembar Pengesahan, Kata Pengantar, Daftar Isi, End of Chapter
+    let mut prev_max_y = 0.0f64;
+    for p in &prev_page.paragraphs {
+        if !p.lines.is_empty() && p.lines.iter().any(|l| !l.words.is_empty()) {
+            if p.bbox.y_max > prev_max_y {
+                prev_max_y = p.bbox.y_max;
+            }
+        }
+    }
+    for t in &prev_page.tables {
+        if t.bbox.y_max > prev_max_y {
+            prev_max_y = t.bbox.y_max;
+        }
+    }
+    for g in &prev_page.graphics {
+        if !g.is_background && g.bbox.y_max > prev_max_y {
+            prev_max_y = g.bbox.y_max;
         }
     }
 
-    // 3. In all other cases: every physical PDF page is an intentional page boundary!
-    // (Cover page, Lembar Pengesahan, Kata Pengantar, Daftar Isi, Chapters, Sections, etc.)
-    true
+    let is_short_termination = prev_max_y > 0.0 && prev_max_y < (prev_page.height_points * 0.82);
+    if is_short_termination {
+        return true;
+    }
+
+    // 3. Semantic Chapter / Major Section Boundary
+    // If the next page begins with a major heading (H1) near the top of the page
+    if let Some(first_p) = curr_page.paragraphs.first() {
+        if first_p.is_header && first_p.tag == "H1" && first_p.bbox.y_min <= 120.0 {
+            return true;
+        }
+    }
+
+    // Dense pages (>= 82% full) with continuing body text flow naturally in Word's layout engine
+    // without creating single-line orphaned pages.
+    false
 }
