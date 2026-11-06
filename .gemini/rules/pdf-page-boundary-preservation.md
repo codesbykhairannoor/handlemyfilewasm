@@ -22,3 +22,11 @@
    - Derive `space_before` strictly from the visual vertical delta ($\Delta y = y_{\min}(i) - y_{\max}(i-1) - 2.0$) between bounding boxes in the PDF.
    - Keep `space_after = 0.0` and let `space_before` faithfully represent inter-block distance.
 
+5. **Zero Natural Language Keywords (Strict Language-Agnostic Engine)**:
+   - NEVER hardcode human language keywords or strings (e.g. "DAFTAR ISI", "TABLE OF CONTENTS", "BAB", "CHAPTER", "KATA PENGANTAR", "HALAMAN", "PAGE", "LEMBAR PENGESAHAN", etc.) in any part of the engine (DLA, classifier, rxyc, table detector, or DOCX generator).
+   - The engine must operate universally across all languages and scripts (Latin, Cyrillic, CJK, Arabic, Devanagari, etc.).
+   - All structural decisions must be derived strictly from:
+     a. **Typography**: Relative font size ratios ($font \ge 1.35 \times median\_body$), font weights (`is_bold`), Unicode casing properties (`is_all_caps` via `is_alphabetic` and `is_uppercase`).
+     b. **Spatial Geometry**: Coordinates ($y_{\min} \le 160\text{ pt}$ for page-top titles), horizontal alignment (`alignment == "center"`), block length ($\le 2$ lines, $\le 80$ characters), and bounding box margins.
+     c. **Structural Leader Patterns**: Universal dot leader patterns (`..` or trailing page number with tab gap $\ge 20\text{ pt}$ or $x \ge 350\text{ pt}$) to detect TOC rows and generate native Word dot-leader tabs, completely independent of natural language strings.
+
