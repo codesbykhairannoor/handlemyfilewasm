@@ -220,6 +220,23 @@ impl DocxRelationships {
                     url_content,
                     page_field
                 ));
+            } else if let Some(prefix) = crate::dla::strip_trailing_page_token(full_text.trim()) {
+                let is_right_aligned = p.alignment == "right" || p.bbox.x_min >= 350.0;
+                let jc = if is_right_aligned { "right" } else if p.alignment == "left" { "left" } else { "center" };
+
+                xml.push_str(&format!(
+                    r#"  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:jc w:val="{}"/>
+    </w:pPr>
+    <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{} </w:t></w:r>
+    <w:fldSimple w:instr="PAGE"/>
+  </w:p>
+"#,
+                    jc,
+                    crate::utils::escape_xml(&prefix)
+                ));
             } else {
                 let is_pure_num = crate::dla::is_page_number_pattern(&full_text) || full_text.chars().all(|c| c.is_ascii_digit());
                 let is_right_aligned = p.alignment == "right" || p.bbox.x_min >= 350.0;

@@ -56,18 +56,64 @@ impl DocxWriter {
             }
         }
 
+        // Statistical Dominance for Document-Wide Running Headers & Footers
+        let total_pages = pages.len();
         let header_count = pages.iter().filter(|p| p.header.is_some()).count();
         let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
-        let has_header = header_count >= 2 || (pages.len() <= 2 && header_count >= 1);
-        let has_footer = footer_count >= 2 || (pages.len() <= 2 && footer_count >= 1);
-        let header_p = pages
-            .iter()
-            .filter_map(|p| p.header.as_ref())
-            .max_by_key(|p| p.lines.iter().map(|l| l.runs.len()).sum::<usize>());
-        let footer_p = pages
-            .iter()
-            .filter_map(|p| p.footer.as_ref())
-            .max_by_key(|p| p.lines.iter().map(|l| l.runs.len()).sum::<usize>());
+
+        // A document running header must be present across >= 50% of pages (or >= 2 if <= 3 pages)
+        let has_header = if total_pages <= 3 {
+            header_count >= 2
+        } else {
+            (header_count as f64 / total_pages as f64) >= 0.50
+        };
+
+        // A document running footer must be present across >= 30% of pages (or >= 1 if <= 3 pages)
+        let has_footer = if total_pages <= 3 {
+            footer_count >= 1
+        } else {
+            (footer_count as f64 / total_pages as f64) >= 0.30
+        };
+
+        let header_p = if has_header {
+            pages.iter().filter_map(|p| p.header.as_ref()).next()
+        } else {
+            None
+        };
+
+        // Determine dominant footer category (Pure Page Number vs Dual URL vs Template)
+        let footer_p = if has_footer {
+            let mut pure_num_count = 0;
+            let mut dual_url_count = 0;
+
+            for p in pages {
+                if let Some(ftr) = &p.footer {
+                    let text = ftr.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
+                    let t = text.trim();
+                    if t.contains("http://") || t.contains("https://") {
+                        dual_url_count += 1;
+                    } else {
+                        pure_num_count += 1;
+                    }
+                }
+            }
+
+            if dual_url_count > pure_num_count && dual_url_count >= 2 {
+                // Dual URL footer dominates
+                pages.iter().filter_map(|p| p.footer.as_ref()).find(|f| {
+                    let t = f.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
+                    t.contains("http://") || t.contains("https://")
+                })
+            } else {
+                // Pure page number dominates (default for reports/theses)
+                pages.iter().filter_map(|p| p.footer.as_ref()).find(|f| {
+                    let t = f.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect::<Vec<_>>().join(" ");
+                    crate::dla::is_page_number_pattern(t.trim()) || t.trim().chars().all(|c| c.is_ascii_digit())
+                }).or_else(|| pages.iter().filter_map(|p| p.footer.as_ref()).next())
+            }
+        } else {
+            None
+        };
 
         // Dominant margins and page width for exact tab stop alignment:
         let dominant_w = pages.first().map(|p| p.width_points).unwrap_or(595.0);
