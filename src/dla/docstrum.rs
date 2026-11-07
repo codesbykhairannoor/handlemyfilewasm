@@ -136,7 +136,8 @@ impl DocstrumAnalyzer {
         };
 
         let d_word = if !horizontal_distances.is_empty() {
-            (horizontal_distances[horizontal_distances.len() * 3 / 4]).max(median_font_size * 0.22)
+            (horizontal_distances[horizontal_distances.len() * 3 / 4])
+                .clamp(median_font_size * 0.20, median_font_size * 0.38)
         } else {
             median_font_size * 0.25
         };
@@ -210,7 +211,10 @@ impl DocstrumAnalyzer {
                 // Check distance from previous glyph in current word
                 if let Some(prev) = curr_word_glyphs.last() {
                     let gap = g.bbox.x_min - prev.bbox.x_max;
-                    let space_thresh = metrics.d_word.max(g.style.font_size * 0.22);
+                    let font_sz = g.style.font_size.max(prev.style.font_size).max(6.0);
+                    // O'Gorman decision boundary between inter-character and inter-word spacing:
+                    // bounded dynamically by font size [0.18 em, 0.32 em]
+                    let space_thresh = (metrics.d_word * 0.6).clamp(font_sz * 0.18, font_sz * 0.32);
 
                     if gap >= space_thresh {
                         words.push(build_word(std::mem::take(&mut curr_word_glyphs)));

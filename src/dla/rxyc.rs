@@ -58,12 +58,13 @@ fn rxyc_banded(
                 if (first_cy - cy).abs() <= (h * 0.4) {
                     let line_min_x = line.iter().map(|item| item.bbox.x_min).fold(f64::INFINITY, f64::min);
                     let line_max_x = line.iter().map(|item| item.bbox.x_max).fold(f64::NEG_INFINITY, f64::max);
+                    let gutter_thresh = col_gap_thresh.max(h * 0.70);
                     let is_gutter_gap = if w.bbox.x_min >= line_max_x {
                         let gap = w.bbox.x_min - line_max_x;
-                        gap >= col_gap_thresh.max(16.0)
+                        gap >= gutter_thresh
                     } else if w.bbox.x_max <= line_min_x {
                         let gap = line_min_x - w.bbox.x_max;
-                        gap >= col_gap_thresh.max(16.0)
+                        gap >= gutter_thresh
                     } else {
                         false
                     };

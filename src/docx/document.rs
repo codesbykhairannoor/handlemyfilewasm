@@ -61,8 +61,8 @@ impl DocxDocumentBuilder {
 
         let left_pts = if !left_margins.is_empty() { left_margins[left_margins.len() / 2] } else { 72.0 };
         let right_pts = if !right_margins.is_empty() { right_margins[right_margins.len() / 2] } else { 72.0 };
-        let top_pts = if !top_margins.is_empty() { top_margins[top_margins.len() / 2].max(54.0) } else { 54.0 };
-        let bottom_pts = if !bottom_margins.is_empty() { bottom_margins[bottom_margins.len() / 2].max(54.0) } else { 54.0 };
+        let top_pts = if !top_margins.is_empty() { top_margins[top_margins.len() / 2].clamp(28.0, 72.0) } else { 54.0 };
+        let bottom_pts = if !bottom_margins.is_empty() { bottom_margins[bottom_margins.len() / 2].clamp(28.0, 72.0) } else { 54.0 };
 
         let left_twips = points_to_twips(left_pts);
         let right_twips = points_to_twips(right_pts);
@@ -76,14 +76,6 @@ impl DocxDocumentBuilder {
         let mut is_prev_first_page = false;
         let mut global_img_idx = 1;
         let mut has_emitted_first_multi_col_sect = false;
-
-        // A true multi-column document (e.g. IEEE/ACM academic paper, journal article):
-        // 1. Must have substantial columnar paragraphs across multiple pages (>= 5 paragraphs in Col 1 per page)
-        // 2. Must NOT be a table-dominated document (which requires full-width 1-column layout)
-        // 3. Must span across at least 35% of the total document pages
-        let has_dominant_wide_tables = pages.iter().any(|p| {
-            p.tables.iter().any(|t| t.cells.iter().any(|row| row.len() >= 5))
-        });
 
         for page in pages.iter() {
             last_page_w = points_to_twips(page.width_points);
@@ -136,8 +128,7 @@ impl DocxDocumentBuilder {
             render_background_graphics_container(&mut xml, &bg_graphics, 4);
 
             // 2. Check if this page is a Multi-Column page
-            let is_page_multi_column = !has_dominant_wide_tables
-                && page.paragraphs.iter().any(|p| p.column_index == 1);
+            let is_page_multi_column = page.paragraphs.iter().any(|p| p.column_index == 1);
 
             enum PageItem<'a> {
                 Para(&'a ParagraphBlock),
@@ -228,6 +219,7 @@ impl DocxDocumentBuilder {
                     xml.push_str(&format!(
                         r#"    <w:p>
       <w:pPr>
+        <w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/>
         <w:sectPr>
 {}{}{}{}          <w:cols w:num="1" w:space="720"/>
         </w:sectPr>
@@ -483,7 +475,11 @@ fn render_paragraph(
     let after_twips = points_to_twips(p.space_after);
 
     let line_spacing_attr = if let Some(twips) = p.line_spacing_twips {
-        let rule = if p.line_rule == "exact" { "exact" } else { "auto" };
+        let rule = match p.line_rule.as_str() {
+            "exact" if twips >= 200 => "exact",
+            "atLeast" => "atLeast",
+            _ => "auto",
+        };
         format!(" w:line=\"{}\" w:lineRule=\"{}\"", twips, rule)
     } else {
         " w:line=\"240\" w:lineRule=\"auto\"".to_string()

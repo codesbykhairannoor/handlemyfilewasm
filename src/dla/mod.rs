@@ -150,25 +150,60 @@ impl LayoutAnalyzer {
         // 7. Final Inter-Paragraph Geometric Spacing Calculation
         // Calculate true vertical delta between adjacent paragraphs in the final body list
         for page in pages.iter_mut() {
-            let mut element_bounds: Vec<f64> = page.paragraphs.iter().map(|p| p.bbox.y_max).collect();
+            let is_multi_col = page.paragraphs.iter().any(|x| x.column_index == 1);
+            let w_page = page.width_points;
+
+            struct FlowElem {
+                y_max: f64,
+                col: usize,
+                is_wide: bool,
+            }
+
+            let mut elements: Vec<FlowElem> = Vec::new();
+            for p in &page.paragraphs {
+                let is_wide = p.bbox.width() >= (w_page * 0.55);
+                elements.push(FlowElem {
+                    y_max: p.bbox.y_max,
+                    col: p.column_index,
+                    is_wide,
+                });
+            }
             for t in &page.tables {
-                element_bounds.push(t.bbox.y_max);
+                let is_wide = t.bbox.width() >= (w_page * 0.55);
+                let cx = (t.bbox.x_min + t.bbox.x_max) / 2.0;
+                let col = if cx >= (w_page / 2.0) { 1 } else { 0 };
+                elements.push(FlowElem {
+                    y_max: t.bbox.y_max,
+                    col,
+                    is_wide,
+                });
             }
 
             for p in page.paragraphs.iter_mut() {
                 p.space_after = 0.0;
                 let curr_top = p.bbox.y_min;
+                let p_col = p.column_index;
 
                 let mut prev_bottom = 0.0f64;
-                for &b in &element_bounds {
-                    if b <= curr_top && b > prev_bottom {
-                        prev_bottom = b;
+                let mut prev_is_wide = false;
+
+                for elem in &elements {
+                    let is_same_flow = !is_multi_col || elem.col == p_col;
+                    if is_same_flow && elem.y_max <= (curr_top + 3.0) && elem.y_max > prev_bottom {
+                        prev_bottom = elem.y_max;
+                        prev_is_wide = elem.is_wide;
                     }
                 }
 
-                if prev_bottom > 0.0 {
+                // If this is the first paragraph in a column under a section break or page margin:
+                // start with 0 space_before so the column begins cleanly at the margin.
+                if prev_bottom > 0.0 && !prev_is_wide {
                     let gap = (curr_top - prev_bottom).max(0.0);
-                    p.space_before = (gap - 2.0).clamp(0.0, 24.0);
+                    if gap > 4.0 {
+                        p.space_before = (gap - 2.0).clamp(0.0, 16.0);
+                    } else {
+                        p.space_before = 0.0;
+                    }
                 } else {
                     p.space_before = 0.0;
                 }

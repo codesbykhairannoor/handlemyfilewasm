@@ -480,10 +480,16 @@ fn detect_line_spacing(p: &mut ParagraphBlock) {
         let auto_line = ((ratio / 1.15) * 240.0).round() as i32;
         p.line_spacing_twips = Some(auto_line);
         p.line_rule = "auto".to_string();
+    } else if ratio < 0.90 {
+        // Tight line spacing: Never use exact small twips which forces line collision in Word.
+        // Use atLeast with minimum font height so lines are never clipped or overlapped.
+        let min_line = ((dom_font_size * 1.05) * 20.0).round() as i32;
+        p.line_spacing_twips = Some(min_line);
+        p.line_rule = "atLeast".to_string();
     } else {
-        let exact_twips = (avg_dy * 20.0).round() as i32;
-        p.line_spacing_twips = Some(exact_twips);
-        p.line_rule = "exact".to_string();
+        let auto_line = ((ratio / 1.15) * 240.0).round() as i32;
+        p.line_spacing_twips = Some(auto_line);
+        p.line_rule = "auto".to_string();
     }
 }
 
