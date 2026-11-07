@@ -389,12 +389,14 @@ fn detect_alignment(p: &mut ParagraphBlock, page_width: f64) {
     let avg_center: f64 = x_centers.iter().sum::<f64>() / (n as f64);
     let page_cx = page_width / 2.0;
 
-    if delta_center <= 8.0
-        && (avg_center - page_cx).abs() <= 25.0
-        && p.bbox.width() < (page_width * 0.75)
-    {
-        p.alignment = "center".to_string();
-        return;
+    if delta_center <= 8.0 && p.bbox.width() < (page_width * 0.85) {
+        let widths: Vec<f64> = p.lines.iter().map(|l| l.bbox.width()).collect();
+        let min_w = widths.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_w = widths.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        if (max_w - min_w) >= 15.0 || (avg_center - page_cx).abs() <= 35.0 {
+            p.alignment = "center".to_string();
+            return;
+        }
     }
 
     // 3. Justified Alignment Check (Rata Kiri-Kanan / "both"):

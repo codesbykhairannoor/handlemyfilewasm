@@ -150,16 +150,27 @@ impl LayoutAnalyzer {
         // 7. Final Inter-Paragraph Geometric Spacing Calculation
         // Calculate true vertical delta between adjacent paragraphs in the final body list
         for page in pages.iter_mut() {
-            let num_p = page.paragraphs.len();
-            for i in 0..num_p {
-                page.paragraphs[i].space_after = 0.0;
-                if i == 0 {
-                    page.paragraphs[i].space_before = 0.0;
-                } else {
-                    let prev_bottom = page.paragraphs[i - 1].bbox.y_max;
-                    let curr_top = page.paragraphs[i].bbox.y_min;
+            let mut element_bounds: Vec<f64> = page.paragraphs.iter().map(|p| p.bbox.y_max).collect();
+            for t in &page.tables {
+                element_bounds.push(t.bbox.y_max);
+            }
+
+            for p in page.paragraphs.iter_mut() {
+                p.space_after = 0.0;
+                let curr_top = p.bbox.y_min;
+
+                let mut prev_bottom = 0.0f64;
+                for &b in &element_bounds {
+                    if b <= curr_top && b > prev_bottom {
+                        prev_bottom = b;
+                    }
+                }
+
+                if prev_bottom > 0.0 {
                     let gap = (curr_top - prev_bottom).max(0.0);
-                    page.paragraphs[i].space_before = (gap - 2.0).clamp(0.0, 24.0);
+                    p.space_before = (gap - 2.0).clamp(0.0, 24.0);
+                } else {
+                    p.space_before = 0.0;
                 }
             }
         }
@@ -812,7 +823,7 @@ fn compute_and_set_page_margins(page: &mut DocumentPage) {
     page.margin_bottom_points = bottom_margin;
 }
 
-/// Universal Language-Agnostic Geometric Classification: Background/Underlay vs Inline Content
+/// Universal Language-Agnostic Geometric Classification: Background/Underlay vs Overlay Anchors vs Inline Content
 fn classify_page_graphics(page: &mut DocumentPage) {
     let page_area = (page.width_points * page.height_points).max(1.0);
 
@@ -830,13 +841,49 @@ fn classify_page_graphics(page: &mut DocumentPage) {
         if is_full_page {
             g.is_inline = false;
             g.is_background = true;
-        } else {
-            // Universal Geometric Rule 2: All content graphics (charts, plots, figures, photos, logos, diagrams)
-            // across all languages are strictly INLINE elements (<wp:inline>) in Microsoft Word.
-            // This prevents body text from ever typing over illustrations.
-            g.is_inline = true;
-            g.is_background = false;
+            g.behind_doc = true;
+            continue;
         }
+
+        // Universal Geometric Rule 2: Table Overlays (Signatures, Stamps, Seals, Emblems, Checkmarks)
+        // If an image physically intersects or is contained within any table matrix on the page,
+        // it cannot be an inline block element without destroying the tabular grid.
+        // It floats directly in front of the table cell (behindDoc="0").
+        let overlaps_table = page.tables.iter().any(|t| t.bbox.intersects(&g.bbox));
+        if overlaps_table {
+            g.is_inline = false;
+            g.is_background = true;
+            g.behind_doc = false;
+            continue;
+        }
+
+        // Universal Geometric Rule 3: Side-by-Side Anchors (Corner Logos, Header Emblems)
+        // If an image shares vertical band overlap (>= 35%) with a paragraph side-by-side,
+        // treating it as an inline block element would force it onto a separate paragraph line,
+        // artificially inflating page height and pushing following content to subsequent pages.
+        let shares_band_side_by_side = page.paragraphs.iter().any(|p| {
+            let y_overlap = (g.bbox.y_max.min(p.bbox.y_max) - g.bbox.y_min.max(p.bbox.y_min)).max(0.0);
+            let min_h = g.bbox.height().min(p.bbox.height());
+            if min_h > 0.0 && (y_overlap / min_h) >= 0.35 {
+                // Horizontally separated (side-by-side, not colliding in the same column)
+                (g.bbox.x_max <= p.bbox.x_min + 15.0) || (p.bbox.x_max <= g.bbox.x_min + 15.0)
+            } else {
+                false
+            }
+        });
+
+        if shares_band_side_by_side {
+            g.is_inline = false;
+            g.is_background = true;
+            g.behind_doc = false;
+            continue;
+        }
+
+        // Universal Geometric Rule 4: Standalone Inline Content (Charts, Plots, Flowcharts, Diagrams)
+        // Graphic spans the column/page width with complete clearance across its vertical band.
+        g.is_inline = true;
+        g.is_background = false;
+        g.behind_doc = false;
     }
 }
 

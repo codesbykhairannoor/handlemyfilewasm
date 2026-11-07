@@ -501,6 +501,21 @@ fn render_paragraph(
             "{}    <w:ind w:left=\"{}\" w:hanging=\"360\"/>\n",
             ind, indent_twips
         ));
+    } else {
+        let page_cx = left_margin_pts + (printable_w_pts / 2.0);
+        let para_cx = (p.bbox.x_min + p.bbox.x_max) / 2.0;
+        let is_page_centered = (para_cx - page_cx).abs() <= 35.0;
+
+        if (!is_page_centered || p.alignment != "center") && p.bbox.x_min > (left_margin_pts + 15.0) {
+            let left_indent_pts = (p.bbox.x_min - left_margin_pts).max(0.0);
+            let indent_twips = points_to_twips(left_indent_pts);
+            if indent_twips >= 200 {
+                xml.push_str(&format!(
+                    "{}    <w:ind w:left=\"{}\"/>\n",
+                    ind, indent_twips
+                ));
+            }
+        }
     }
 
     // 6. Justification / Alignment
@@ -516,9 +531,12 @@ fn render_paragraph(
 
     // Render Text Runs
     for (line_idx, line) in p.lines.iter().enumerate() {
+        if line_idx > 0 && (p.alignment == "center" || p.is_header) {
+            xml.push_str(&format!("{}    <w:r><w:br/></w:r>\n", ind));
+        }
         for (run_idx, run) in line.runs.iter().enumerate() {
             let mut r = run.clone();
-            if line_idx > 0 && run_idx == 0 && !r.is_tab {
+            if line_idx > 0 && run_idx == 0 && !r.is_tab && !(p.alignment == "center" || p.is_header) {
                 if let Some(prev_line) = p.lines.get(line_idx - 1) {
                     if let Some(prev_run) = prev_line.runs.last() {
                         if !prev_run.text.ends_with('-') && !prev_run.text.ends_with(' ') && !r.text.starts_with(' ') {
@@ -902,7 +920,7 @@ fn render_background_graphics_container(
     xml.push_str(&format!("{ind}</w:p>\n"));
 }
 
-/// Renders a background graphic run as a floating DrawingML anchor behind document (behindDoc="1")
+/// Renders a background or overlay graphic run as a floating DrawingML anchor
 fn render_background_graphic_run(
     xml: &mut String,
     g: &GraphicObject,
@@ -917,10 +935,12 @@ fn render_background_graphic_run(
     let cx_emu = (g.bbox.width() * 12700.0).round().max(12700.0) as i64;
     let cy_emu = (g.bbox.height() * 12700.0).round().max(12700.0) as i64;
 
+    let behind_val = if g.behind_doc { "1" } else { "0" };
+
     xml.push_str(&format!(
         "{ind}<w:r>\n\
          {ind}  <w:drawing>\n\
-         {ind}    <wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"0\" behindDoc=\"1\" locked=\"1\" layoutInCell=\"0\" allowOverlap=\"1\">\n\
+         {ind}    <wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"0\" behindDoc=\"{behind_val}\" locked=\"1\" layoutInCell=\"0\" allowOverlap=\"1\">\n\
          {ind}      <wp:simplePos x=\"0\" y=\"0\"/>\n\
          {ind}      <wp:positionH relativeFrom=\"page\">\n\
          {ind}        <wp:posOffset>{x_emu}</wp:posOffset>\n\

@@ -298,6 +298,8 @@ pub struct GraphicObject {
     pub is_inline: bool,
     #[serde(default)]
     pub is_background: bool,
+    #[serde(default)]
+    pub behind_doc: bool,
 }
 
 fn default_margin_points() -> f64 {
