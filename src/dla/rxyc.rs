@@ -218,9 +218,22 @@ fn rxyc_recursive(
                 t.len() <= 6 && (t.chars().all(|c| c.is_ascii_digit()) || crate::utils::is_roman_numeral(t) || t.starts_with(':'))
             });
 
-            let is_toc_or_tabular = shared_rows >= 2 && is_terminal_value_col;
+            // If words across cut_x share horizontal baselines, they represent coupled rows
+            // (tab stops, right-aligned dates/prices, TOC, or key-value forms), NOT parallel reading columns.
+            // Suppress vertical cut so lines remain unified and flow naturally.
+            let is_row_based = shared_rows >= 1 && (
+                is_colon_form
+                || is_terminal_value_col
+                || {
+                    let right_span_w = right_words.iter().map(|w| w.bbox.x_max).fold(f64::NEG_INFINITY, f64::max)
+                        - right_words.iter().map(|w| w.bbox.x_min).fold(f64::INFINITY, f64::min);
+                    let left_span_w = left_words.iter().map(|w| w.bbox.x_max).fold(f64::NEG_INFINITY, f64::max)
+                        - left_words.iter().map(|w| w.bbox.x_min).fold(f64::INFINITY, f64::min);
+                    right_words.len() <= 20 || (right_span_w < 140.0 && left_span_w > 160.0)
+                }
+            );
 
-            if is_colon_form || is_toc_or_tabular {
+            if is_row_based {
                 None
             } else {
                 Some((cut_x, gap_x))

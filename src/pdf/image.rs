@@ -289,7 +289,89 @@ pub fn extract_image_object(
         return None;
     }
 
+    // Check /Decode array for color inversion (e.g. [1 0] for inverted monochrome/grayscale)
+    let is_inverted = if let Ok(dec_obj) = stream.dict.get(b"Decode") {
+        if let Ok(arr) = dec_obj.as_array() {
+            if arr.len() >= 2 {
+                let to_f64 = |obj: &Object| match obj {
+                    Object::Real(r) => *r as f64,
+                    Object::Integer(i) => *i as f64,
+                    _ => 0.0,
+                };
+                let d0 = to_f64(&arr[0]);
+                let d1 = to_f64(&arr[1]);
+                d0 > d1
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // Check if image is a 1-bit or stencil /ImageMask
+    let is_image_mask = stream.dict.get(b"ImageMask")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let total_pixels = (width as usize) * (height as usize);
+
+    // 4a. 1-bit Stencil Mask or 1-bit Monochrome Image
+    let bits_per_component = stream.dict.get(b"BitsPerComponent").and_then(|b| b.as_i64()).unwrap_or(8) as u32;
+    let row_stride_1bit = ((width as usize) + 7) / 8;
+
+    if is_image_mask || (bits_per_component == 1 && uncompressed_bytes.len() >= row_stride_1bit * (height as usize)) {
+        let mut rgba = Vec::with_capacity(total_pixels * 4);
+        for y in 0..(height as usize) {
+            let row_start = y * row_stride_1bit;
+            for x in 0..(width as usize) {
+                let byte_idx = row_start + (x / 8);
+                let bit_idx = 7 - (x % 8);
+                let bit = if byte_idx < uncompressed_bytes.len() {
+                    (uncompressed_bytes[byte_idx] >> bit_idx) & 1
+                } else {
+                    0
+                };
+
+                let is_ink = if is_inverted { bit == 0 } else { bit == 1 };
+
+                if is_image_mask {
+                    // Stencil mask: ink pixels are solid black, background is fully transparent!
+                    if is_ink {
+                        rgba.push(0);
+                        rgba.push(0);
+                        rgba.push(0);
+                        rgba.push(255);
+                    } else {
+                        rgba.push(255);
+                        rgba.push(255);
+                        rgba.push(255);
+                        rgba.push(0);
+                    }
+                } else {
+                    // Standard 1-bit monochrome image
+                    let val = if is_ink { 0 } else { 255 };
+                    rgba.push(val);
+                    rgba.push(val);
+                    rgba.push(val);
+                    rgba.push(255);
+                }
+            }
+        }
+
+        if let Ok(png_data) = encode_png_rgba(width, height, &rgba) {
+            return Some(GraphicObject {
+                bbox,
+                data: png_data,
+                mime_type: "image/png".to_string(),
+                is_inline: true,
+                is_background: false,
+                behind_doc: false,
+            });
+        }
+    }
 
     // If 3 bytes per pixel (RGB)
     if uncompressed_bytes.len() >= total_pixels * 3 {
@@ -351,10 +433,16 @@ pub fn extract_image_object(
         }
     } else if uncompressed_bytes.len() >= total_pixels {
         // Grayscale (1 byte per pixel)
+        let processed_gray: Vec<u8> = if is_inverted {
+            uncompressed_bytes.iter().take(total_pixels).map(|&b| 255 - b).collect()
+        } else {
+            uncompressed_bytes[..total_pixels].to_vec()
+        };
+
         if !alpha_channel.is_empty() && alpha_channel.len() >= total_pixels {
             let mut rgba = Vec::with_capacity(total_pixels * 4);
             for i in 0..total_pixels {
-                let gray = uncompressed_bytes[i];
+                let gray = processed_gray[i];
                 let a_byte = alpha_channel[i];
                 if a_byte == 0 {
                     rgba.push(0);
@@ -378,7 +466,7 @@ pub fn extract_image_object(
                     behind_doc: false,
                 });
             }
-        } else if let Ok(png_data) = encode_png_gray(width, height, uncompressed_bytes) {
+        } else if let Ok(png_data) = encode_png_gray(width, height, &processed_gray) {
             return Some(GraphicObject {
                 bbox,
                 data: png_data,

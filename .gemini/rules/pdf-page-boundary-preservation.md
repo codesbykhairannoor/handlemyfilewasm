@@ -13,9 +13,9 @@
      Left text (date/URL), tab character (`<w:tab/>`), right text / dynamic page number (`PAGE / NUMPAGES`).
    - Takes up exactly 1 line height ($\sim 11\text{ pt}$) with zero vertical overhead.
 
-3. **Vertical Margin Clearance**:
-   - Always enforce `w:header="360" w:footer="360"` ($18\text{ pt}$) and body margins `w:top` and `w:bottom` $\ge 54\text{ pt}$ ($1080\text{ twips}$).
-   - This guarantees a minimum $25\text{ pt}$ of clean white space clearance between running headers/footers and document text/tables, eliminating overlaps completely.
+3. **Vertical Margin Clearance & Dynamic Clamping**:
+   - Always enforce `w:header="360" w:footer="360"` ($18\text{ pt}$).
+   - Body margins `w:top` and `w:bottom` must be dynamically derived from the document and clamped to safe typographic bounds: `clamp(28.0, 72.0)` points. Never force a minimum of $54\text{ pt}$ which artificially clips tight IEEE/academic margins ($\sim 36-44\text{ pt}$) and pushes content across page boundaries.
 
 4. **Zero Synthetic Spacing Inflation**:
    - Never inject arbitrary hardcoded paragraph spacing constants (e.g. `+12pt`, `+6pt`, `+80 twips`).

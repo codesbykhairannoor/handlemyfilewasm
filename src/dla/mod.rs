@@ -963,59 +963,84 @@ fn deduplicate_page_tables(tables: &mut Vec<crate::models::TableMatrix>) {
     }
 }
 
-/// Universal Geometric Multi-Column Classification
+/// Multi-Column Layout Classification based on Continuous Vertical Gutter Projection
+/// A multi-column page requires an unobstructed vertical whitespace corridor (gutter)
+/// down the center, with substantial parallel narrative flows on both sides.
+/// Pages where text flows across the center (resumes, single-column articles, forms)
+/// are strictly preserved as single-column documents.
 fn assign_paragraph_column_indices(page: &mut DocumentPage) {
     if page.paragraphs.is_empty() {
         return;
     }
 
-    let w = page.width_points;
-    let x_mid = w / 2.0;
+    let page_w = page.width_points;
+    let x_center = page_w / 2.0;
+    let gutter_half_w = 8.0; // 16 pt central corridor [x_center - 8.0, x_center + 8.0]
 
-    let mut left_count = 0;
-    let mut right_count = 0;
+    // 1. Identify paragraphs that straddle or cross the center corridor
+    let mut center_crossing_chars = 0usize;
+    let mut left_chars = 0usize;
+    let mut right_chars = 0usize;
     let mut left_min_y = f64::INFINITY;
     let mut left_max_y = f64::NEG_INFINITY;
     let mut right_min_y = f64::INFINITY;
     let mut right_max_y = f64::NEG_INFINITY;
 
     for p in &page.paragraphs {
-        let is_wide = p.bbox.width() >= (w * 0.55)
-            || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0));
-        if !is_wide {
-            // Margin check: ignore tiny marginal annotations (like line numbers < 35 pt wide in margins)
-            if p.bbox.width() < 35.0 && (p.bbox.x_max <= 75.0 || p.bbox.x_min >= (w - 75.0)) {
-                continue;
-            }
-            if p.bbox.x_max <= (x_mid + 15.0) {
-                left_count += 1;
-                left_min_y = left_min_y.min(p.bbox.y_min);
-                left_max_y = left_max_y.max(p.bbox.y_max);
-            } else if p.bbox.x_min >= (x_mid - 15.0) {
-                right_count += 1;
-                right_min_y = right_min_y.min(p.bbox.y_min);
-                right_max_y = right_max_y.max(p.bbox.y_max);
-            }
+        let char_count: usize = p.lines.iter().flat_map(|l| l.words.iter()).map(|w| w.text.len()).sum();
+        if char_count == 0 {
+            continue;
+        }
+
+        // Marginal annotations (e.g. line numbers in review manuscripts < 35 pt wide) do not define columns
+        let is_marginal = p.bbox.width() < 35.0 && (p.bbox.x_max <= 75.0 || p.bbox.x_min >= (page_w - 75.0));
+        if is_marginal {
+            continue;
+        }
+
+        let crosses_center = p.bbox.x_min < (x_center - gutter_half_w) && p.bbox.x_max > (x_center + gutter_half_w);
+        if crosses_center {
+            // Check if this is a header/title spanning block or regular body text crossing center
+            center_crossing_chars += char_count;
+        } else if p.bbox.x_max <= (x_center + gutter_half_w) {
+            left_chars += char_count;
+            left_min_y = left_min_y.min(p.bbox.y_min);
+            left_max_y = left_max_y.max(p.bbox.y_max);
+        } else if p.bbox.x_min >= (x_center - gutter_half_w) {
+            right_chars += char_count;
+            right_min_y = right_min_y.min(p.bbox.y_min);
+            right_max_y = right_max_y.max(p.bbox.y_max);
         }
     }
 
-    // Two-column layout exists if both columns have content AND they share vertical extent
+    // A two-column page layout requires:
+    // 1. Parallel flows on both left and right sharing vertical extent
+    // 2. Both columns have substantial narrative text (min 150 chars each)
+    // 3. Balanced text mass: min(left, right) / max(left, right) >= 0.40
+    // 4. Center corridor is largely clear: columnar mass must overwhelmingly dominate any center-crossing text
     let y_overlap = (left_max_y.min(right_max_y) - left_min_y.max(right_min_y)).max(0.0);
-    let is_two_col = left_count >= 1 && right_count >= 1 && y_overlap > 30.0;
+    let min_col_chars = left_chars.min(right_chars);
+    let max_col_chars = left_chars.max(right_chars);
 
-    if is_two_col {
-        for p in page.paragraphs.iter_mut() {
+    let is_two_col = max_col_chars > 0
+        && (min_col_chars as f64 / max_col_chars as f64) >= 0.40
+        && min_col_chars >= 150
+        && y_overlap >= 40.0
+        && (left_chars + right_chars) >= (center_crossing_chars * 2);
+
+    for p in page.paragraphs.iter_mut() {
+        if is_two_col {
             let cx = (p.bbox.x_min + p.bbox.x_max) / 2.0;
-            let is_wide = p.bbox.width() >= (w * 0.55)
-                || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0));
+            let is_wide = p.bbox.width() >= (page_w * 0.55)
+                || (p.bbox.x_min < (x_center - 25.0) && p.bbox.x_max > (x_center + 25.0));
 
-            if is_wide {
-                p.column_index = 0;
-            } else if cx >= x_mid || p.bbox.x_min >= (x_mid - 15.0) {
-                p.column_index = 1;
-            } else {
-                p.column_index = 0;
-            }
+            p.column_index = match (is_wide, cx >= x_center) {
+                (true, _) => 0,
+                (false, true) => 1,
+                (false, false) => 0,
+            };
+        } else {
+            p.column_index = 0;
         }
     }
 }
