@@ -244,7 +244,7 @@ fn rxyc_recursive(
             split_horizontal(words, cut_y, col_gap_thresh, para_gap_thresh, page_height, out_blocks);
         }
         (None, None) => {
-            out_blocks.extend(assemble_paragraphs_from_words(words));
+            out_blocks.extend(assemble_paragraphs_from_words(words, page_height));
         }
     }
 }
@@ -271,7 +271,7 @@ fn split_vertical(
 
     if left_words.is_empty() || right_words.is_empty() {
         let all = if !left_words.is_empty() { left_words } else { right_words };
-        out_blocks.extend(assemble_paragraphs_from_words(all));
+        out_blocks.extend(assemble_paragraphs_from_words(all, page_height));
         return;
     }
 
@@ -302,7 +302,7 @@ fn split_horizontal(
 
     if top_words.is_empty() || bot_words.is_empty() {
         let all = if !top_words.is_empty() { top_words } else { bot_words };
-        out_blocks.extend(assemble_paragraphs_from_words(all));
+        out_blocks.extend(assemble_paragraphs_from_words(all, page_height));
         return;
     }
 
@@ -401,7 +401,7 @@ fn find_horizontal_cut_with_gap(words: &[Word], min_gap: f64) -> Option<(f64, f6
 }
 
 /// Assembles Words into TextLines, and TextLines into ParagraphBlocks (splitting on bullet items)
-fn assemble_paragraphs_from_words(mut words: Vec<Word>) -> Vec<ParagraphBlock> {
+fn assemble_paragraphs_from_words(mut words: Vec<Word>, page_height: f64) -> Vec<ParagraphBlock> {
     if words.is_empty() {
         return Vec::new();
     }
@@ -473,9 +473,16 @@ fn assemble_paragraphs_from_words(mut words: Vec<Word>) -> Vec<ParagraphBlock> {
 
         let line_is_toc = is_toc_line_entry(&line);
 
+        // Standalone bottom page number: must ALWAYS be an independent paragraph
+        let line_text = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let line_is_bottom_pn = line.bbox.y_min >= (page_height - 90.0) && line.words.len() <= 2 && crate::dla::is_page_number_pattern(&line_text);
+
         let is_para_break = if let Some(prev) = curr_lines.last() {
             let prev_is_toc = is_toc_line_entry(prev);
-            if line_is_toc || prev_is_toc || starts_new_item {
+            let prev_text = prev.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+            let prev_is_bottom_pn = prev.bbox.y_min >= (page_height - 90.0) && prev.words.len() <= 2 && crate::dla::is_page_number_pattern(&prev_text);
+
+            if line_is_toc || prev_is_toc || starts_new_item || line_is_bottom_pn || prev_is_bottom_pn {
                 true
             } else {
                 let gap = line.bbox.y_min - prev.bbox.y_max;

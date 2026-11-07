@@ -141,17 +141,21 @@ pub fn consolidate_broken_sentence_paragraphs(paragraphs: &mut Vec<ParagraphBloc
             let last_text = get_block_full_text(last);
             let curr_text = get_block_full_text(&p);
 
-            // NEVER merge frame elements in the header strip or footer strip!
-            let in_header_strip = last.bbox.y_max <= 50.0 || p.bbox.y_max <= 50.0;
-            let in_footer_strip = last.bbox.y_min >= 780.0 || p.bbox.y_min >= 780.0;
+            // NEVER merge Table of Contents lines or entries!
+            let is_last_toc = last.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l));
+            let is_curr_toc = p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l));
 
-            if in_header_strip || in_footer_strip {
+            // NEVER merge frame elements in the header strip or footer strip!
+            let in_header_strip = last.bbox.y_max <= 55.0 || p.bbox.y_max <= 55.0;
+            let in_footer_strip = last.bbox.y_min >= 700.0 || p.bbox.y_min >= 700.0;
+
+            if is_last_toc || is_curr_toc || in_header_strip || in_footer_strip {
                 false
             } else {
                 let is_curr_list = p.is_list || starts_with_bullet_or_number(&curr_text);
                 if !is_curr_list && !last.is_header && !p.is_header && !last_text.is_empty() && !curr_text.is_empty() {
                     let last_char = last_text.trim_end().chars().last().unwrap_or('.');
-                    let ends_sentence = last_char == '.' || last_char == '?' || last_char == '!' || last_char == ':' || last_char == ';';
+                    let ends_sentence = last_char == '.' || last_char == '?' || last_char == '!' || last_char == ':' || last_char == ';' || last_char.is_ascii_digit();
 
                     let gap_y = p.bbox.y_min - last.bbox.y_max;
                     let x_overlap = p.bbox.x_min < (last.bbox.x_max + 10.0) && p.bbox.x_max > (last.bbox.x_min - 10.0);

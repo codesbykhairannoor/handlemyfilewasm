@@ -32,9 +32,8 @@ impl DocxDocumentBuilder {
 
         let header_count = pages.iter().filter(|p| p.header.is_some()).count();
         let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
-        let min_pages_for_hf = if pages.len() <= 3 { 2 } else { 3 };
-        let has_header = header_count >= min_pages_for_hf;
-        let has_footer = footer_count >= min_pages_for_hf;
+        let has_header = header_count >= 2;
+        let has_footer = footer_count >= 2;
 
         // Section Properties: Dominant / Median Page Margins
         let mut left_margins: Vec<f64> = pages.iter().map(|p| p.margin_left_points).filter(|&m| m > 10.0).collect();
@@ -391,6 +390,31 @@ fn render_paragraph(
     left_margin_pts: f64,
     indent: usize,
 ) {
+    // Safety Invariant: If a paragraph block contains multiple TOC lines with dot leader tabs,
+    // each line MUST be rendered as an independent <w:p> so Word applies the tab stops to each line!
+    let has_dot_leaders = p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot));
+    if has_dot_leaders && p.lines.len() > 1 {
+        for line in &p.lines {
+            let single_line_para = ParagraphBlock {
+                lines: vec![line.clone()],
+                bbox: line.bbox,
+                tag: p.tag.clone(),
+                alignment: p.alignment.clone(),
+                space_before: 0.0,
+                space_after: 0.0,
+                line_spacing_twips: p.line_spacing_twips,
+                line_rule: p.line_rule.clone(),
+                is_header: p.is_header,
+                is_list: p.is_list,
+                list_id: p.list_id,
+                list_level: p.list_level,
+                column_index: p.column_index,
+            };
+            render_paragraph(xml, &single_line_para, printable_w_pts, left_margin_pts, indent);
+        }
+        return;
+    }
+
     let ind = " ".repeat(indent);
 
     xml.push_str(&format!("{}<w:p>\n", ind));

@@ -259,13 +259,14 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
         .map(|(text, _)| text)
         .collect();
 
-    // 2. Identify recurring running footer text at bottom of pages (y_min >= page_h - 55.0)
+    // 2. Identify recurring running footer text at bottom of pages (y_min >= page_h - 85.0)
     let mut bottom_footer_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut page_num_bottom_count = 0;
     for page in pages.iter() {
         let page_h = page.height_points;
         for p in &page.paragraphs {
-            if (p.bbox.y_min >= (page_h - 55.0) || (p.bbox.y_min + p.bbox.y_max) / 2.0 >= (page_h - 45.0)) && p.lines.len() <= 2 {
+            let in_footer_strip = (p.bbox.y_min >= (page_h - 85.0) || (p.bbox.y_min + p.bbox.y_max) / 2.0 >= (page_h - 75.0)) && p.lines.len() <= 2;
+            if in_footer_strip {
                 let text = get_paragraph_full_text(p);
                 if is_page_number_pattern(&text) {
                     page_num_bottom_count += 1;
@@ -280,7 +281,8 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
         .filter(|(_, count)| *count >= min_recur_count)
         .map(|(text, _)| text)
         .collect();
-    let recurring_bottom_page_nums = page_num_bottom_count >= min_recur_count;
+    // Standalone page numbers appearing on 2 or more pages indicate active document page numbering
+    let recurring_bottom_page_nums = page_num_bottom_count >= 2;
 
     // 3. Extract ONLY confirmed recurring headers and footers from body paragraphs.
     // If text does NOT match confirmed recurring headers/footers, it MUST REMAIN in the body!
@@ -315,13 +317,13 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
 
             // Only extract as footer if it matches a confirmed recurring footer or recurring page number
             let is_recurring_footer_text = !valid_bottom_footers.is_empty()
-                && (p.bbox.y_min >= (page_h - 55.0) || cy >= (page_h - 45.0))
+                && (p.bbox.y_min >= (page_h - 85.0) || cy >= (page_h - 75.0))
                 && p.lines.len() <= 2
                 && valid_bottom_footers.iter().any(|f| f == &full_text);
 
             let is_recurring_page_num = recurring_bottom_page_nums
                 && is_standalone_num
-                && (p.bbox.y_min >= (page_h - 60.0) || cy >= (page_h - 50.0));
+                && (p.bbox.y_min >= (page_h - 85.0) || cy >= (page_h - 75.0));
 
             if is_recurring_footer_text || is_recurring_page_num {
                 footer_blocks.push(p);
