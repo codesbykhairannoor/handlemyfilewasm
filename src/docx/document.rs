@@ -32,8 +32,8 @@ impl DocxDocumentBuilder {
 
         let header_count = pages.iter().filter(|p| p.header.is_some()).count();
         let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
-        let has_header = header_count >= 2;
-        let has_footer = footer_count >= 2;
+        let has_header = header_count >= 2 || (pages.len() <= 2 && header_count >= 1);
+        let has_footer = footer_count >= 2 || (pages.len() <= 2 && footer_count >= 1);
 
         // Section Properties: Dominant / Median Page Margins
         let mut left_margins: Vec<f64> = pages.iter().map(|p| p.margin_left_points).filter(|&m| m > 10.0).collect();
@@ -228,8 +228,7 @@ impl DocxDocumentBuilder {
                         r#"    <w:p>
       <w:pPr>
         <w:sectPr>
-{}{}{}{}          <w:titlePg/>
-          <w:cols w:num="1" w:space="720"/>
+{}{}{}{}          <w:cols w:num="1" w:space="720"/>
         </w:sectPr>
       </w:pPr>
     </w:p>
@@ -367,15 +366,21 @@ impl DocxDocumentBuilder {
             ""
         };
 
+        let page1_has_hf = pages.first().map(|p| p.header.is_some() || p.footer.is_some()).unwrap_or(false);
+        let title_pg_xml = if !page1_has_hf && (has_header || has_footer) {
+            "      <w:titlePg/>\n"
+        } else {
+            ""
+        };
+
         xml.push_str(&format!(
             r#"    <w:sectPr>
 {}{}      <w:pgSz w:w="{}" w:h="{}"/>
       <w:pgMar w:top="{}" w:right="{}" w:bottom="{}" w:left="{}" w:header="360" w:footer="360" w:gutter="0"/>
-      <w:titlePg/>
-{}    </w:sectPr>
+{}{}    </w:sectPr>
   </w:body>
 </w:document>"#,
-            hdr_ref, ftr_ref, last_page_w, last_page_h, top_twips, right_twips, bottom_twips, left_twips, cols_xml
+            hdr_ref, ftr_ref, last_page_w, last_page_h, top_twips, right_twips, bottom_twips, left_twips, title_pg_xml, cols_xml
         ));
 
         xml

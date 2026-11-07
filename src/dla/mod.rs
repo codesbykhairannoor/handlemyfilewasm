@@ -205,12 +205,40 @@ fn stitch_cross_page_continuations(pages: &mut [DocumentPage]) {
                 let first_char = trimmed_first.chars().next().unwrap_or('A');
                 let starts_with_lower = first_char.is_lowercase();
 
+                // Safety Invariants for Cross-Page Stitching:
+                // 1. Never stitch if near page footer/header strips
+                let is_near_bottom = last_p.bbox.y_min >= (pages[i].height_points - 80.0);
+                let is_near_top = first_p.bbox.y_max <= 65.0;
+
+                // 2. Never stitch if containing dot-leader tab stops (Table of Contents)
+                let has_toc_tabs = last_p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot))
+                    || first_p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot));
+
+                // 3. Never stitch URLs or command strings
+                let has_url = trimmed_last.contains("http://") || trimmed_last.contains("https://")
+                    || trimmed_first.contains("http://") || trimmed_first.contains("https://");
+
+                // 4. Font size and family must match (same continuous prose styling)
+                let font_matches = {
+                    let f1 = last_p.lines.first().and_then(|l| l.words.first()).map(|w| (w.style.font_size, &w.style.font_family));
+                    let f2 = first_p.lines.first().and_then(|l| l.words.first()).map(|w| (w.style.font_size, &w.style.font_family));
+                    match (f1, f2) {
+                        (Some((s1, fam1)), Some((s2, fam2))) => (s1 - s2).abs() <= 1.5 && fam1 == fam2,
+                        _ => true,
+                    }
+                };
+
                 !last_p.is_header
                     && !first_p.is_header
                     && !last_p.is_list
                     && !first_p.is_list
                     && !ends_with_punct
                     && starts_with_lower
+                    && !is_near_bottom
+                    && !is_near_top
+                    && !has_toc_tabs
+                    && !has_url
+                    && font_matches
             } else {
                 false
             }
@@ -236,98 +264,124 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
         return;
     }
 
-    // Minimum occurrences required for text to be considered a running header or footer.
-    // For 2-3 pages: must appear on at least 2 pages.
-    // For 4+ pages: must appear on at least 3 pages OR >= 25% of pages.
-    let min_recur_count = if total_pages <= 3 { 2 } else { 3.max((total_pages as f64 * 0.25) as usize) };
+    // Minimum distinct page occurrences required for a template or page number series to be confirmed:
+    // For 2-5 pages: must appear on at least 2 pages.
+    // For 6+ pages: must appear on at least 2 pages OR >= 20% of total pages.
+    let min_recur_pages = if total_pages <= 5 { 2 } else { 2.max((total_pages as f64 * 0.20) as usize) };
 
-    // 1. Identify recurring running header text at top of pages (y_max <= 50.0)
-    let mut top_header_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for page in pages.iter() {
+    // 1. Collect candidate headers across all pages
+    let mut header_template_pages: std::collections::HashMap<String, std::collections::HashSet<usize>> = std::collections::HashMap::new();
+    let mut top_page_num_pages: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for (page_idx, page) in pages.iter().enumerate() {
+        let page_h = page.height_points;
+        let header_y_limit = 60.0_f64.max(page_h * 0.08);
         for p in &page.paragraphs {
-            if p.bbox.y_max <= 50.0 && p.lines.len() <= 2 {
-                let text = get_paragraph_full_text(p);
-                if text.len() >= 4 {
-                    *top_header_counts.entry(text).or_insert(0) += 1;
+            let is_in_header_strip = p.bbox.y_max <= header_y_limit && p.lines.len() <= 2;
+            let has_toc_tabs = p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot));
+            if is_in_header_strip && !has_toc_tabs {
+                let cand = analyze_candidate(p);
+                if cand.is_pure_page_num {
+                    top_page_num_pages.insert(page_idx);
+                } else if cand.normalized_template.len() >= 4 {
+                    header_template_pages.entry(cand.normalized_template).or_default().insert(page_idx);
                 }
             }
         }
     }
-    let valid_top_headers: Vec<String> = top_header_counts
-        .into_iter()
-        .filter(|(_, count)| *count >= min_recur_count)
-        .map(|(text, _)| text)
-        .collect();
 
-    // 2. Identify recurring running footer text at bottom of pages (y_min >= page_h - 85.0)
-    let mut bottom_footer_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut page_num_bottom_count = 0;
-    for page in pages.iter() {
+    let confirmed_header_templates: Vec<String> = header_template_pages
+        .into_iter()
+        .filter(|(_, p_set)| p_set.len() >= min_recur_pages)
+        .map(|(tmpl, _)| tmpl)
+        .collect();
+    let confirmed_top_page_nums = top_page_num_pages.len() >= 2;
+
+    // 2. Collect candidate footers across all pages
+    let mut footer_template_pages: std::collections::HashMap<String, std::collections::HashSet<usize>> = std::collections::HashMap::new();
+    let mut bottom_page_num_pages: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for (page_idx, page) in pages.iter().enumerate() {
         let page_h = page.height_points;
+        let footer_y_limit = page_h - 85.0_f64.max(page_h * 0.10);
+        let footer_cy_limit = page_h - 75.0_f64.max(page_h * 0.09);
         for p in &page.paragraphs {
-            let in_footer_strip = (p.bbox.y_min >= (page_h - 85.0) || (p.bbox.y_min + p.bbox.y_max) / 2.0 >= (page_h - 75.0)) && p.lines.len() <= 2;
-            if in_footer_strip {
-                let text = get_paragraph_full_text(p);
-                if is_page_number_pattern(&text) {
-                    page_num_bottom_count += 1;
-                } else if text.len() >= 4 {
-                    *bottom_footer_counts.entry(text).or_insert(0) += 1;
+            let cy = (p.bbox.y_min + p.bbox.y_max) / 2.0;
+            let is_in_footer_strip = (p.bbox.y_min >= footer_y_limit || cy >= footer_cy_limit) && p.lines.len() <= 2;
+            let has_toc_tabs = p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot));
+            if is_in_footer_strip && !has_toc_tabs {
+                let cand = analyze_candidate(p);
+                if cand.is_pure_page_num {
+                    bottom_page_num_pages.insert(page_idx);
+                } else if cand.normalized_template.len() >= 4 {
+                    footer_template_pages.entry(cand.normalized_template).or_default().insert(page_idx);
                 }
             }
         }
     }
-    let valid_bottom_footers: Vec<String> = bottom_footer_counts
-        .into_iter()
-        .filter(|(_, count)| *count >= min_recur_count)
-        .map(|(text, _)| text)
-        .collect();
-    // Standalone page numbers appearing on 2 or more pages indicate active document page numbering
-    let recurring_bottom_page_nums = page_num_bottom_count >= 2;
 
-    // 3. Extract ONLY confirmed recurring headers and footers from body paragraphs.
-    // If text does NOT match confirmed recurring headers/footers, it MUST REMAIN in the body!
-    for page in pages.iter_mut() {
+    let confirmed_footer_templates: Vec<String> = footer_template_pages
+        .into_iter()
+        .filter(|(_, p_set)| p_set.len() >= min_recur_pages)
+        .map(|(tmpl, _)| tmpl)
+        .collect();
+    let confirmed_bottom_page_nums = bottom_page_num_pages.len() >= 2;
+
+    // 3. Extract confirmed recurring headers and footers from each page
+    for (_page_idx, page) in pages.iter_mut().enumerate() {
         let page_h = page.height_points;
+        let header_y_limit = 60.0_f64.max(page_h * 0.08);
+        let footer_y_limit = page_h - 85.0_f64.max(page_h * 0.10);
+        let footer_cy_limit = page_h - 75.0_f64.max(page_h * 0.09);
 
         let mut header_blocks: Vec<crate::models::ParagraphBlock> = Vec::new();
         let mut footer_blocks: Vec<crate::models::ParagraphBlock> = Vec::new();
         let mut kept_paragraphs = Vec::with_capacity(page.paragraphs.len());
 
-        for p in page.paragraphs.drain(..) {
+        for mut p in page.paragraphs.drain(..) {
             let full_text = get_paragraph_full_text(&p);
             if full_text.is_empty() {
                 continue;
             }
 
-            let cy = (p.bbox.y_min + p.bbox.y_max) / 2.0;
-
-            // Only extract as header if it matches a confirmed recurring header
-            let is_recurring_header = !valid_top_headers.is_empty()
-                && p.bbox.y_max <= 55.0
-                && p.lines.len() <= 2
-                && valid_top_headers.iter().any(|h| h == &full_text);
-
-            if is_recurring_header {
-                header_blocks.push(p);
+            let has_toc_tabs = p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot));
+            if has_toc_tabs {
+                kept_paragraphs.push(p);
                 continue;
             }
 
-            // Standalone page number
-            let is_standalone_num = is_page_number_pattern(&full_text) && p.lines.len() <= 1;
+            let cy = (p.bbox.y_min + p.bbox.y_max) / 2.0;
+            let is_in_header_strip = p.bbox.y_max <= header_y_limit && p.lines.len() <= 2;
+            let is_in_footer_strip = (p.bbox.y_min >= footer_y_limit || cy >= footer_cy_limit) && p.lines.len() <= 2;
 
-            // Only extract as footer if it matches a confirmed recurring footer or recurring page number
-            let is_recurring_footer_text = !valid_bottom_footers.is_empty()
-                && (p.bbox.y_min >= (page_h - 85.0) || cy >= (page_h - 75.0))
-                && p.lines.len() <= 2
-                && valid_bottom_footers.iter().any(|f| f == &full_text);
+            if is_in_header_strip {
+                let cand = analyze_candidate(&p);
+                let is_confirmed = (confirmed_top_page_nums && cand.is_pure_page_num)
+                    || (!confirmed_header_templates.is_empty()
+                        && confirmed_header_templates.iter().any(|t| t == &cand.normalized_template));
 
-            let is_recurring_page_num = recurring_bottom_page_nums
-                && is_standalone_num
-                && (p.bbox.y_min >= (page_h - 85.0) || cy >= (page_h - 75.0));
+                if is_confirmed {
+                    if cand.has_gap_split && !cand.left_text.is_empty() && !cand.right_text.is_empty() {
+                        apply_gap_split_to_paragraph(&mut p, &cand.left_text, &cand.right_text);
+                    }
+                    header_blocks.push(p);
+                    continue;
+                }
+            }
 
-            if is_recurring_footer_text || is_recurring_page_num {
-                footer_blocks.push(p);
-                continue;
+            if is_in_footer_strip {
+                let cand = analyze_candidate(&p);
+                let is_confirmed = (confirmed_bottom_page_nums && cand.is_pure_page_num)
+                    || (!confirmed_footer_templates.is_empty()
+                        && confirmed_footer_templates.iter().any(|t| t == &cand.normalized_template));
+
+                if is_confirmed {
+                    if cand.has_gap_split && !cand.left_text.is_empty() && !cand.right_text.is_empty() {
+                        apply_gap_split_to_paragraph(&mut p, &cand.left_text, &cand.right_text);
+                    }
+                    footer_blocks.push(p);
+                    continue;
+                }
             }
 
             kept_paragraphs.push(p);
@@ -421,6 +475,188 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
     }
 }
 
+/// Structure holding layout analysis metadata for candidate running headers and footers
+#[derive(Debug, Clone)]
+struct HeaderFooterCandidate {
+    raw_text: String,
+    normalized_template: String,
+    has_page_token: bool,
+    is_pure_page_num: bool,
+    has_gap_split: bool,
+    left_text: String,
+    right_text: String,
+}
+
+fn analyze_candidate(p: &crate::models::ParagraphBlock) -> HeaderFooterCandidate {
+    let raw_text = get_paragraph_full_text(p);
+    let trimmed = raw_text.trim().to_string();
+
+    if is_page_number_pattern(&trimmed) && p.lines.len() <= 1 {
+        return HeaderFooterCandidate {
+            raw_text,
+            normalized_template: String::new(),
+            has_page_token: true,
+            is_pure_page_num: true,
+            has_gap_split: false,
+            left_text: String::new(),
+            right_text: trimmed,
+        };
+    }
+
+    // Check for large horizontal gap (>= 28.0 pt) between words on line 0 (dual header/footer)
+    let mut found_gap = false;
+    let mut left_words = Vec::new();
+    let mut right_words = Vec::new();
+
+    if let Some(line) = p.lines.first() {
+        if line.words.len() >= 2 {
+            for i in 0..line.words.len() {
+                if i > 0 && !found_gap {
+                    let prev = &line.words[i - 1];
+                    let curr = &line.words[i];
+                    let gap = curr.bbox.x_min - prev.bbox.x_max;
+                    if gap >= 28.0 {
+                        found_gap = true;
+                    }
+                }
+                if found_gap {
+                    right_words.push(line.words[i].text.as_str());
+                } else {
+                    left_words.push(line.words[i].text.as_str());
+                }
+            }
+        }
+    }
+
+    let left_text = left_words.join(" ").trim().to_string();
+    let right_text = right_words.join(" ").trim().to_string();
+    let has_gap_split = found_gap && !left_text.is_empty() && !right_text.is_empty();
+
+    let mut norm = trimmed.clone();
+    let mut has_page_token = false;
+
+    if has_gap_split {
+        if is_page_fraction_or_num(&right_text) {
+            has_page_token = true;
+            norm = left_text.clone();
+        } else {
+            norm = format!("{} | {}", left_text, right_text);
+        }
+    } else {
+        if let Some(stripped) = strip_trailing_page_token(&trimmed) {
+            norm = stripped;
+            has_page_token = true;
+        } else if let Some(stripped) = strip_leading_page_token(&trimmed) {
+            norm = stripped;
+            has_page_token = true;
+        }
+    }
+
+    HeaderFooterCandidate {
+        raw_text,
+        normalized_template: norm.trim().to_string(),
+        has_page_token,
+        is_pure_page_num: false,
+        has_gap_split,
+        left_text,
+        right_text,
+    }
+}
+
+fn apply_gap_split_to_paragraph(p: &mut crate::models::ParagraphBlock, left: &str, right: &str) {
+    if let Some(line) = p.lines.first_mut() {
+        let style = line.words.first().map(|w| w.style.clone()).unwrap_or_default();
+        line.runs.clear();
+        line.runs.push(crate::models::TextRun {
+            text: left.to_string(),
+            style: style.clone(),
+            is_tab: false,
+            is_leader_dot: false,
+        });
+        line.runs.push(crate::models::TextRun {
+            text: String::new(),
+            style: style.clone(),
+            is_tab: true,
+            is_leader_dot: false,
+        });
+        line.runs.push(crate::models::TextRun {
+            text: right.to_string(),
+            style,
+            is_tab: false,
+            is_leader_dot: false,
+        });
+    }
+}
+
+pub fn is_page_fraction_or_num(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if is_page_number_pattern(t) {
+        return true;
+    }
+    // Fraction format: "1/8", "1 / 8", "12/55"
+    if let Some((l, r)) = t.split_once('/') {
+        let left = l.trim();
+        let right = r.trim();
+        if !left.is_empty()
+            && !right.is_empty()
+            && left.chars().all(|c| c.is_ascii_digit())
+            && right.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+    // "1 of 8", "1 dari 8"
+    let parts: Vec<&str> = t.split_whitespace().collect();
+    if parts.len() == 3
+        && parts[0].chars().all(|c| c.is_ascii_digit())
+        && parts[2].chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
+    }
+    false
+}
+
+pub fn strip_trailing_page_token(s: &str) -> Option<String> {
+    let t = s.trim();
+    if let Some(idx) = t.rfind(' ') {
+        let last_word = &t[idx + 1..];
+        if is_page_fraction_or_num(last_word) {
+            let prefix = t[..idx].trim();
+            if !prefix.is_empty() {
+                return Some(prefix.to_string());
+            }
+        }
+        // Check last 2 words: "Page 1", "Hal 1"
+        if let Some(idx2) = t[..idx].rfind(' ') {
+            let last_two = &t[idx2 + 1..];
+            if is_page_number_pattern(last_two) {
+                let prefix = t[..idx2].trim();
+                if !prefix.is_empty() {
+                    return Some(prefix.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn strip_leading_page_token(s: &str) -> Option<String> {
+    let t = s.trim();
+    if let Some(idx) = t.find(' ') {
+        let first_word = &t[..idx];
+        if is_page_fraction_or_num(first_word) {
+            let suffix = t[idx + 1..].trim();
+            if !suffix.is_empty() {
+                return Some(suffix.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn get_paragraph_full_text(p: &crate::models::ParagraphBlock) -> String {
     p.lines
         .iter()
@@ -431,7 +667,7 @@ fn get_paragraph_full_text(p: &crate::models::ParagraphBlock) -> String {
         .to_string()
 }
 
-fn is_page_number_pattern(text: &str) -> bool {
+pub fn is_page_number_pattern(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() {
         return false;

@@ -188,7 +188,7 @@ impl DocxRelationships {
                     crate::utils::escape_xml(u)
                 };
 
-                let page_field = if full_text.contains('/') {
+                let page_field = if right_text.contains('/') || full_text.contains('/') {
                     r#"    <w:fldSimple w:instr="PAGE"/>
     <w:r>
       <w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr>
@@ -221,12 +221,13 @@ impl DocxRelationships {
                     page_field
                 ));
             } else {
-                // Pure page number: determine alignment (right vs center)
+                let is_pure_num = crate::dla::is_page_number_pattern(&full_text) || full_text.chars().all(|c| c.is_ascii_digit());
                 let is_right_aligned = p.alignment == "right" || p.bbox.x_min >= 350.0;
-                let jc = if is_right_aligned { "right" } else { "center" };
+                let jc = if is_right_aligned { "right" } else if p.alignment == "left" { "left" } else { "center" };
 
-                xml.push_str(&format!(
-                    r#"  <w:p>
+                if is_pure_num {
+                    xml.push_str(&format!(
+                        r#"  <w:p>
     <w:pPr>
       <w:pStyle w:val="Footer"/>
       <w:jc w:val="{}"/>
@@ -234,8 +235,22 @@ impl DocxRelationships {
     <w:fldSimple w:instr="PAGE"/>
   </w:p>
 "#,
-                    jc
-                ));
+                        jc
+                    ));
+                } else {
+                    xml.push_str(&format!(
+                        r#"  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:jc w:val="{}"/>
+    </w:pPr>
+    <w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="595959"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>
+  </w:p>
+"#,
+                        jc,
+                        crate::utils::escape_xml(&full_text)
+                    ));
+                }
             }
         }
         xml.push_str("</w:ftr>");

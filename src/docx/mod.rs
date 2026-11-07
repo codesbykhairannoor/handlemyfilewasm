@@ -58,8 +58,8 @@ impl DocxWriter {
 
         let header_count = pages.iter().filter(|p| p.header.is_some()).count();
         let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
-        let has_header = header_count >= 2;
-        let has_footer = footer_count >= 2;
+        let has_header = header_count >= 2 || (pages.len() <= 2 && header_count >= 1);
+        let has_footer = footer_count >= 2 || (pages.len() <= 2 && footer_count >= 1);
         let header_p = pages
             .iter()
             .filter_map(|p| p.header.as_ref())
