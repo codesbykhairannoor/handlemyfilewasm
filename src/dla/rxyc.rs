@@ -211,29 +211,27 @@ fn rxyc_recursive(
                 })
             }).count();
 
-            // A tabular row column is ONLY true if right_words consists purely of short terminal tokens
-            // (e.g. single page numerals or colons), NOT multi-word running text or titles!
-            let is_terminal_value_col = !right_words.is_empty() && right_words.iter().all(|w| {
-                let t = w.text.trim().trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
-                t.len() <= 6 && (t.chars().all(|c| c.is_ascii_digit()) || crate::utils::is_roman_numeral(t) || t.starts_with(':'))
-            });
+            // Evaluate Continuous Tab-Stop Row Probability via Tensor Engine
+            let right_chars: usize = right_words.iter().map(|w| w.text.len()).sum();
+            let left_chars: usize = left_words.iter().map(|w| w.text.len()).sum();
+            let right_span_w = (right_words.iter().map(|w| w.bbox.x_max).fold(f64::NEG_INFINITY, f64::max)
+                - right_words.iter().map(|w| w.bbox.x_min).fold(f64::INFINITY, f64::min)).max(1.0);
+            let left_span_w = (left_words.iter().map(|w| w.bbox.x_max).fold(f64::NEG_INFINITY, f64::max)
+                - left_words.iter().map(|w| w.bbox.x_min).fold(f64::INFINITY, f64::min)).max(1.0);
 
-            // If words across cut_x share horizontal baselines, they represent coupled rows
-            // (tab stops, right-aligned dates/prices, TOC, or key-value forms), NOT parallel reading columns.
-            // Suppress vertical cut so lines remain unified and flow naturally.
-            let is_row_based = shared_rows >= 1 && (
-                is_colon_form
-                || is_terminal_value_col
-                || {
-                    let right_span_w = right_words.iter().map(|w| w.bbox.x_max).fold(f64::NEG_INFINITY, f64::max)
-                        - right_words.iter().map(|w| w.bbox.x_min).fold(f64::INFINITY, f64::min);
-                    let left_span_w = left_words.iter().map(|w| w.bbox.x_max).fold(f64::NEG_INFINITY, f64::max)
-                        - left_words.iter().map(|w| w.bbox.x_min).fold(f64::INFINITY, f64::min);
-                    right_words.len() <= 20 || (right_span_w < 140.0 && left_span_w > 160.0)
-                }
+            let shared_baseline_ratio = shared_rows as f64 / right_words.len().max(1) as f64;
+            let width_asymmetry = 1.0 - (right_span_w / left_span_w).clamp(0.0, 1.0);
+            let mass_asymmetry = 1.0 - (right_chars as f64 / left_chars.max(1) as f64).clamp(0.0, 1.0);
+
+            let p_tab_row = crate::dla::tensor::LayoutTensorEngine::evaluate_tab_row_probability(
+                shared_baseline_ratio,
+                width_asymmetry,
+                mass_asymmetry,
             );
 
-            if is_row_based {
+            // If probability >= 0.50, tokens represent row-coupled entries (tabs, dates, prices)
+            // Suppress vertical cut so lines remain unified and flow naturally.
+            if p_tab_row >= 0.50 || is_colon_form {
                 None
             } else {
                 Some((cut_x, gap_x))

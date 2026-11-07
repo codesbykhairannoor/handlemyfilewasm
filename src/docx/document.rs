@@ -175,11 +175,20 @@ impl DocxDocumentBuilder {
                 }
 
                 for t in &page.tables {
-                    let cx = (t.bbox.x_min + t.bbox.x_max) / 2.0;
-                    if cx >= gutter_x {
-                        col1_items.push(PageItem::Table(t));
+                    let p_spanning = crate::dla::tensor::LayoutTensorEngine::evaluate_table_spanning_probability(
+                        t.bbox.width(),
+                        printable_w_pts,
+                    );
+                    if p_spanning >= 0.50 {
+                        // Wide spanning table across both columns: render at full printable width
+                        spanning_items.push(PageItem::Table(t));
                     } else {
-                        col0_items.push(PageItem::Table(t));
+                        let cx = (t.bbox.x_min + t.bbox.x_max) / 2.0;
+                        if cx >= gutter_x {
+                            col1_items.push(PageItem::Table(t));
+                        } else {
+                            col0_items.push(PageItem::Table(t));
+                        }
                     }
                 }
 

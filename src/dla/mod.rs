@@ -4,6 +4,7 @@ pub mod rxyc;
 pub mod classifier;
 pub mod tables;
 pub mod tabs;
+pub mod tensor;
 
 pub use docstrum::{DocstrumAnalyzer, DocstrumMetrics};
 pub use otsu::{OtsuAnalyzer, TypographicScale};
@@ -11,6 +12,7 @@ pub use rxyc::RecursiveXYCut;
 pub use classifier::{HeadingClassifier, build_line_runs};
 pub use tables::TableRecognizer;
 pub use tabs::TabStopDetector;
+pub use tensor::LayoutTensorEngine;
 
 use crate::models::DocumentPage;
 
@@ -1013,20 +1015,36 @@ fn assign_paragraph_column_indices(page: &mut DocumentPage) {
         }
     }
 
-    // A two-column page layout requires:
-    // 1. Parallel flows on both left and right sharing vertical extent
-    // 2. Both columns have substantial narrative text (min 150 chars each)
-    // 3. Balanced text mass: min(left, right) / max(left, right) >= 0.40
-    // 4. Center corridor is largely clear: columnar mass must overwhelmingly dominate any center-crossing text
-    let y_overlap = (left_max_y.min(right_max_y) - left_min_y.max(right_min_y)).max(0.0);
+    // Evaluate Continuous Two-Column Layout Probability via Linear Discriminant Tensor Model
+    let total_chars = center_crossing_chars + left_chars + right_chars;
+    let center_clearance = if total_chars > 0 {
+        1.0 - (center_crossing_chars as f64 / total_chars as f64)
+    } else {
+        1.0
+    };
     let min_col_chars = left_chars.min(right_chars);
     let max_col_chars = left_chars.max(right_chars);
+    let mass_symmetry = if max_col_chars > 0 {
+        min_col_chars as f64 / max_col_chars as f64
+    } else {
+        0.0
+    };
+    let page_h = page.height_points.max(100.0);
+    let vertical_overlap = (left_max_y.min(right_max_y) - left_min_y.max(right_min_y)).max(0.0) / page_h;
+    let columnar_dominance = if total_chars > 0 {
+        (left_chars + right_chars) as f64 / total_chars as f64
+    } else {
+        0.0
+    };
 
-    let is_two_col = max_col_chars > 0
-        && (min_col_chars as f64 / max_col_chars as f64) >= 0.40
-        && min_col_chars >= 150
-        && y_overlap >= 40.0
-        && (left_chars + right_chars) >= (center_crossing_chars * 2);
+    let p_two_col = LayoutTensorEngine::evaluate_two_column_probability(
+        center_clearance,
+        mass_symmetry,
+        vertical_overlap,
+        columnar_dominance,
+    );
+
+    let is_two_col = p_two_col >= 0.50;
 
     for p in page.paragraphs.iter_mut() {
         if is_two_col {
