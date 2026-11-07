@@ -194,10 +194,13 @@ fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
     // Check gap before last word
     let prev_w = &line.words[line.words.len() - 2];
     let trailing_gap = line.words.last().unwrap().bbox.x_min - prev_w.bbox.x_max;
-    let has_wide_jump = trailing_gap >= 25.0;
 
-    // A valid TOC entry either has a dot sequence OR a wide jump leading to the terminal page number
-    if !ends_with_page_num || (!has_dot_sequence && !has_wide_jump) {
+    // A true leader dot line requires an actual dot sequence (.. or . .)
+    // A tab line without dots requires a wide jump across the page (>= 120 pt)
+    let is_leader = has_dot_sequence;
+    let is_wide_tab = !has_dot_sequence && trailing_gap >= 120.0;
+
+    if !ends_with_page_num || (!is_leader && !is_wide_tab) {
         return;
     }
 
@@ -225,11 +228,11 @@ fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
         return;
     }
 
-    // Set tab stop with dot leader (pos will be set to exact printable_width in OOXML emitter)
+    // Set tab stop with dot leader only if actual dots were present in the stream
     line.tab_stops = vec![TabStop {
         x_pos_points: 0.0,
         align_type: "right".to_string(),
-        is_leader_dot: true,
+        is_leader_dot: is_leader,
     }];
 
     let base_style = line.words.first().map(|w| w.style.clone()).unwrap_or_default();
@@ -246,7 +249,7 @@ fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
             text: "\t".to_string(),
             style: num_style.clone(),
             is_tab: true,
-            is_leader_dot: true,
+            is_leader_dot: is_leader,
         },
         TextRun {
             text: page_number,

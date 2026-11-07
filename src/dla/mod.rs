@@ -928,19 +928,9 @@ fn deduplicate_page_tables(tables: &mut Vec<crate::models::TableMatrix>) {
     }
 }
 
-/// Detects 2-column layout and assigns column_index (0 for left, 1 for right)
+/// Universal Geometric Multi-Column Classification
 fn assign_paragraph_column_indices(page: &mut DocumentPage) {
-    if page.paragraphs.len() < 8 {
-        return;
-    }
-
-    // A Table of Contents page is ALWAYS single-column (never partition into columns!)
-    let has_toc_indicators = page.paragraphs.iter().any(|p| {
-        p.lines.iter().any(|l| {
-            l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l)
-        })
-    });
-    if has_toc_indicators {
+    if page.paragraphs.is_empty() {
         return;
     }
 
@@ -949,25 +939,44 @@ fn assign_paragraph_column_indices(page: &mut DocumentPage) {
 
     let mut left_count = 0;
     let mut right_count = 0;
+    let mut left_min_y = f64::INFINITY;
+    let mut left_max_y = f64::NEG_INFINITY;
+    let mut right_min_y = f64::INFINITY;
+    let mut right_max_y = f64::NEG_INFINITY;
 
     for p in &page.paragraphs {
-        if p.bbox.width() <= (w * 0.48) {
-            if p.bbox.x_max <= (x_mid + 8.0) {
+        let is_wide = p.bbox.width() >= (w * 0.55)
+            || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0));
+        if !is_wide {
+            // Margin check: ignore tiny marginal annotations (like line numbers < 35 pt wide in margins)
+            if p.bbox.width() < 35.0 && (p.bbox.x_max <= 75.0 || p.bbox.x_min >= (w - 75.0)) {
+                continue;
+            }
+            if p.bbox.x_max <= (x_mid + 15.0) {
                 left_count += 1;
-            } else if p.bbox.x_min >= (x_mid - 8.0) {
+                left_min_y = left_min_y.min(p.bbox.y_min);
+                left_max_y = left_max_y.max(p.bbox.y_max);
+            } else if p.bbox.x_min >= (x_mid - 15.0) {
                 right_count += 1;
+                right_min_y = right_min_y.min(p.bbox.y_min);
+                right_max_y = right_max_y.max(p.bbox.y_max);
             }
         }
     }
 
-    // Require substantial paragraphs on BOTH columns (at least 5 on each side)
-    if left_count >= 5 && right_count >= 5 {
+    // Two-column layout exists if both columns have content AND they share vertical extent
+    let y_overlap = (left_max_y.min(right_max_y) - left_min_y.max(right_min_y)).max(0.0);
+    let is_two_col = left_count >= 1 && right_count >= 1 && y_overlap > 30.0;
+
+    if is_two_col {
         for p in page.paragraphs.iter_mut() {
             let cx = (p.bbox.x_min + p.bbox.x_max) / 2.0;
-            if p.bbox.width() >= (w * 0.55) || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0)) {
-                // Spanning paragraph (Title, Abstract banner, full-width figure caption)
+            let is_wide = p.bbox.width() >= (w * 0.55)
+                || (p.bbox.x_min < (x_mid - 25.0) && p.bbox.x_max > (x_mid + 25.0));
+
+            if is_wide {
                 p.column_index = 0;
-            } else if cx >= x_mid || p.bbox.x_min >= (x_mid - 8.0) {
+            } else if cx >= x_mid || p.bbox.x_min >= (x_mid - 15.0) {
                 p.column_index = 1;
             } else {
                 p.column_index = 0;

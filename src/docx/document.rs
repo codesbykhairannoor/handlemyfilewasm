@@ -508,12 +508,14 @@ fn render_paragraph(
 
         if (!is_page_centered || p.alignment != "center") && p.bbox.x_min > (left_margin_pts + 15.0) {
             let left_indent_pts = (p.bbox.x_min - left_margin_pts).max(0.0);
-            let indent_twips = points_to_twips(left_indent_pts);
-            if indent_twips >= 200 {
-                xml.push_str(&format!(
-                    "{}    <w:ind w:left=\"{}\"/>\n",
-                    ind, indent_twips
-                ));
+            if left_indent_pts < (printable_w_pts * 0.60) {
+                let indent_twips = points_to_twips(left_indent_pts);
+                if indent_twips >= 200 {
+                    xml.push_str(&format!(
+                        "{}    <w:ind w:left=\"{}\"/>\n",
+                        ind, indent_twips
+                    ));
+                }
             }
         }
     }
