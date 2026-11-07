@@ -41,6 +41,68 @@ pub fn escape_xml(s: &str) -> String {
     out
 }
 
+/// Algorithmic Roman numeral validator and parser (supports standard subtractive notation 1..3999)
+pub fn parse_roman_numeral(s: &str) -> Option<u32> {
+    let s = s.trim().to_uppercase();
+    if s.is_empty() || s.len() > 15 {
+        return None;
+    }
+
+    let mut total = 0u32;
+    let mut prev_val = 0u32;
+
+    for c in s.chars().rev() {
+        let val = match c {
+            'I' => 1,
+            'V' => 5,
+            'X' => 10,
+            'L' => 50,
+            'C' => 100,
+            'D' => 500,
+            'M' => 1000,
+            _ => return None,
+        };
+
+        if val < prev_val {
+            total = total.checked_sub(val)?;
+        } else {
+            total = total.checked_add(val)?;
+            prev_val = val;
+        }
+    }
+
+    if total == 0 || total > 3999 {
+        return None;
+    }
+
+    // Verify canonical representation
+    if to_roman_numeral(total) == s {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+pub fn to_roman_numeral(mut num: u32) -> String {
+    let table = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+    ];
+    let mut result = String::new();
+    for &(val, sym) in &table {
+        while num >= val {
+            result.push_str(sym);
+            num -= val;
+        }
+    }
+    result
+}
+
+pub fn is_roman_numeral(s: &str) -> bool {
+    parse_roman_numeral(s).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,6 +118,17 @@ mod tests {
     #[test]
     fn test_xml_escaping() {
         assert_eq!(escape_xml("Tom & Jerry <10>"), "Tom &amp; Jerry &lt;10&gt;");
+    }
+
+    #[test]
+    fn test_roman_numerals() {
+        assert!(is_roman_numeral("i"));
+        assert!(is_roman_numeral("IV"));
+        assert!(is_roman_numeral("xiv"));
+        assert!(is_roman_numeral("MCMLXXXIV"));
+        assert!(!is_roman_numeral("IIII")); // Invalid canonical
+        assert!(!is_roman_numeral("abc"));
+        assert!(!is_roman_numeral("123"));
     }
 }
 

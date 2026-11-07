@@ -177,23 +177,27 @@ fn insert_tab_runs(line: &mut crate::models::TextLine) {
 
 /// Detects dot leaders in Table of Contents or single line references
 fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
-    if line.words.is_empty() {
+    if line.words.len() < 2 {
         return;
     }
 
     let full_line_text = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
     let dot_count = full_line_text.chars().filter(|&c| c == '.').count();
-    let has_dot_sequence = dot_count >= 3 && (full_line_text.contains("...") || full_line_text.contains(". . .") || full_line_text.contains(".."));
+    let has_dot_sequence = dot_count >= 2 && (full_line_text.contains("..") || full_line_text.contains(". .") || dot_count >= 4);
 
     let last_word_raw = line.words.last().map(|w| w.text.trim()).unwrap_or("");
     let clean_num = last_word_raw.trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
-    let is_digit_page_num = !clean_num.is_empty() && clean_num.len() <= 4 && clean_num.chars().all(|c| c.is_ascii_digit());
-    let is_roman_page_num = is_roman_num_str(clean_num);
+    let is_digit_page_num = !clean_num.is_empty() && clean_num.len() <= 5 && clean_num.chars().all(|c| c.is_ascii_digit());
+    let is_roman_page_num = crate::utils::is_roman_numeral(clean_num);
     let ends_with_page_num = is_digit_page_num || is_roman_page_num;
 
-    // Strict invariant: Must have an actual dot sequence AND end with a valid page number (1..4 digits or roman)
-    // Never turn non-dotted lines (e.g. Student ID, dates, dashes) into dot leaders!
-    if !has_dot_sequence || !ends_with_page_num {
+    // Check gap before last word
+    let prev_w = &line.words[line.words.len() - 2];
+    let trailing_gap = line.words.last().unwrap().bbox.x_min - prev_w.bbox.x_max;
+    let has_wide_jump = trailing_gap >= 25.0;
+
+    // A valid TOC entry either has a dot sequence OR a wide jump leading to the terminal page number
+    if !ends_with_page_num || (!has_dot_sequence && !has_wide_jump) {
         return;
     }
 
@@ -251,13 +255,4 @@ fn detect_single_line_dot_leader(line: &mut crate::models::TextLine) {
             is_leader_dot: false,
         },
     ];
-}
-
-fn is_roman_num_str(t: &str) -> bool {
-    let lower = t.to_lowercase();
-    let roman = [
-        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
-        "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
-    ];
-    roman.contains(&lower.as_str())
 }

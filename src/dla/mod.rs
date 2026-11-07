@@ -1,10 +1,12 @@
 pub mod docstrum;
+pub mod otsu;
 pub mod rxyc;
 pub mod classifier;
 pub mod tables;
 pub mod tabs;
 
 pub use docstrum::{DocstrumAnalyzer, DocstrumMetrics};
+pub use otsu::{OtsuAnalyzer, TypographicScale};
 pub use rxyc::RecursiveXYCut;
 pub use classifier::{HeadingClassifier, build_line_runs};
 pub use tables::TableRecognizer;
@@ -28,7 +30,7 @@ impl LayoutAnalyzer {
                 for p in page.paragraphs.iter_mut() {
                     build_line_runs(&mut p.lines);
                 }
-                HeadingClassifier::process_paragraphs(&mut page.paragraphs, page.width_points);
+                HeadingClassifier::process_paragraphs(&mut page.paragraphs, page.width_points, page.height_points);
                 TabStopDetector::process_paragraph_tabs(&mut page.paragraphs);
 
                 // Anti-Black-Hole: Harvest unclaimed glyphs (tables, headers, footers, metadata)
@@ -58,7 +60,7 @@ impl LayoutAnalyzer {
                     // 2. Segment remaining unclaimed words into paragraphs
                     if !unclaimed_words.is_empty() {
                         let mut extra_paras = RecursiveXYCut::segment(unclaimed_words, page.width_points, page.height_points);
-                        HeadingClassifier::process_paragraphs(&mut extra_paras, page.width_points);
+                        HeadingClassifier::process_paragraphs(&mut extra_paras, page.width_points, page.height_points);
                         TabStopDetector::process_paragraph_tabs(&mut extra_paras);
                         page.paragraphs.extend(extra_paras);
                     }
@@ -85,7 +87,7 @@ impl LayoutAnalyzer {
                 let mut paragraphs = RecursiveXYCut::segment(words, page.width_points, page.height_points);
 
                 // 2e. Semantic Heading, List Classification & TextRun Consolidation + Alignment & Spacing
-                HeadingClassifier::process_paragraphs(&mut paragraphs, page.width_points);
+                HeadingClassifier::process_paragraphs(&mut paragraphs, page.width_points, page.height_points);
 
                 // 2f. Custom Tab Stops detection (colon forms, dot leaders)
                 TabStopDetector::process_paragraph_tabs(&mut paragraphs);
@@ -477,6 +479,7 @@ fn filter_headers_and_footers(pages: &mut [DocumentPage]) {
 
 /// Structure holding layout analysis metadata for candidate running headers and footers
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct HeaderFooterCandidate {
     raw_text: String,
     normalized_template: String,

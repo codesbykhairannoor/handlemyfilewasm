@@ -60,12 +60,10 @@ fn rxyc_banded(
                     let line_max_x = line.iter().map(|item| item.bbox.x_max).fold(f64::NEG_INFINITY, f64::max);
                     let is_gutter_gap = if w.bbox.x_min >= line_max_x {
                         let gap = w.bbox.x_min - line_max_x;
-                        let gap_mid = (line_max_x + w.bbox.x_min) / 2.0;
-                        gap >= 16.0 && (gap_mid - center).abs() <= 50.0
+                        gap >= col_gap_thresh.max(16.0)
                     } else if w.bbox.x_max <= line_min_x {
                         let gap = line_min_x - w.bbox.x_max;
-                        let gap_mid = (w.bbox.x_max + line_min_x) / 2.0;
-                        gap >= 16.0 && (gap_mid - center).abs() <= 50.0
+                        gap >= col_gap_thresh.max(16.0)
                     } else {
                         false
                     };
@@ -212,7 +210,14 @@ fn rxyc_recursive(
                 })
             }).count();
 
-            let is_toc_or_tabular = shared_rows >= 2;
+            // A tabular row column is ONLY true if right_words consists purely of short terminal tokens
+            // (e.g. single page numerals or colons), NOT multi-word running text or titles!
+            let is_terminal_value_col = !right_words.is_empty() && right_words.iter().all(|w| {
+                let t = w.text.trim().trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
+                t.len() <= 6 && (t.chars().all(|c| c.is_ascii_digit()) || crate::utils::is_roman_numeral(t) || t.starts_with(':'))
+            });
+
+            let is_toc_or_tabular = shared_rows >= 2 && is_terminal_value_col;
 
             if is_colon_form || is_toc_or_tabular {
                 None
@@ -540,31 +545,22 @@ fn assemble_paragraphs_from_words(mut words: Vec<Word>, page_height: f64) -> Vec
 pub fn is_toc_line_entry(line: &TextLine) -> bool {
     let full = line.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
     let dot_count = full.chars().filter(|&c| c == '.').count();
-    if dot_count >= 3 && (full.contains("..") || full.contains("...")) {
+    if dot_count >= 2 && (full.contains("..") || full.contains(". .") || dot_count >= 4) {
         return true;
     }
     if line.words.len() >= 2 {
         if let Some(last) = line.words.last() {
             let t = last.text.trim().trim_matches(|c: char| c == '.' || c == ' ' || c == '-' || c == '[' || c == ']');
-            let is_num = !t.is_empty() && t.len() <= 4 && (t.chars().all(|c| c.is_ascii_digit()) || is_roman_num(t));
+            let is_num = !t.is_empty() && t.len() <= 5 && (t.chars().all(|c| c.is_ascii_digit()) || crate::utils::is_roman_numeral(t));
             if is_num {
                 let prev = &line.words[line.words.len() - 2];
-                if (last.bbox.x_min - prev.bbox.x_max) >= 20.0 || last.bbox.x_min >= 350.0 {
+                if (last.bbox.x_min - prev.bbox.x_max) >= 20.0 {
                     return true;
                 }
             }
         }
     }
     false
-}
-
-fn is_roman_num(t: &str) -> bool {
-    let lower = t.to_lowercase();
-    let roman = [
-        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
-        "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
-    ];
-    roman.contains(&lower.as_str())
 }
 
 fn build_para_block(lines: Vec<TextLine>) -> ParagraphBlock {

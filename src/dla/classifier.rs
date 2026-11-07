@@ -1,10 +1,11 @@
 use crate::models::{ParagraphBlock, Style, TextLine, TextRun};
+use crate::dla::otsu::{OtsuAnalyzer, TypographicScale};
 
 pub struct HeadingClassifier;
 
 impl HeadingClassifier {
     /// Classifies paragraph roles (H1..H3, P, List), calculates alignments, line spacings, and constructs unified TextRuns
-    pub fn process_paragraphs(paragraphs: &mut Vec<ParagraphBlock>, page_width: f64) {
+    pub fn process_paragraphs(paragraphs: &mut Vec<ParagraphBlock>, page_width: f64, page_height: f64) {
         if paragraphs.is_empty() {
             return;
         }
@@ -13,9 +14,9 @@ impl HeadingClassifier {
         consolidate_paragraph_fragments(paragraphs);
 
         // 0b. Merge vertically adjacent paragraphs split mid-sentence (continuation lines)
-        consolidate_broken_sentence_paragraphs(paragraphs);
+        consolidate_broken_sentence_paragraphs(paragraphs, page_height);
 
-        // 1. Calculate page-wide dominant body font size
+        // 1. Calculate typographic scale using Otsu variance maximization
         let mut all_font_sizes = Vec::new();
         for p in paragraphs.iter() {
             for line in &p.lines {
@@ -25,16 +26,11 @@ impl HeadingClassifier {
             }
         }
 
-        all_font_sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median_body_size = if !all_font_sizes.is_empty() {
-            all_font_sizes[all_font_sizes.len() / 2]
-        } else {
-            11.0
-        };
+        let scale = OtsuAnalyzer::compute_typographic_scale(&all_font_sizes);
 
         // 2. Classify each paragraph block
         for p in paragraphs.iter_mut() {
-            classify_single_paragraph(p, median_body_size, page_width);
+            classify_single_paragraph(p, &scale, page_width);
 
             // If classified as a bullet list (list_id == 1), strip leading bullet glyphs
             // from the first line so Word's native <w:numPr> bullet doesn't duplicate them!
@@ -123,10 +119,13 @@ pub fn consolidate_paragraph_fragments(paragraphs: &mut Vec<ParagraphBlock>) {
 }
 
 /// Merges vertically adjacent paragraph blocks that were split mid-sentence
-pub fn consolidate_broken_sentence_paragraphs(paragraphs: &mut Vec<ParagraphBlock>) {
+pub fn consolidate_broken_sentence_paragraphs(paragraphs: &mut Vec<ParagraphBlock>, page_height: f64) {
     if paragraphs.len() < 2 {
         return;
     }
+
+    let header_strip = (page_height * 0.08).max(45.0);
+    let footer_strip = (page_height * 0.92).min(page_height - 45.0);
 
     let mut merged: Vec<ParagraphBlock> = Vec::with_capacity(paragraphs.len());
 
@@ -145,9 +144,9 @@ pub fn consolidate_broken_sentence_paragraphs(paragraphs: &mut Vec<ParagraphBloc
             let is_last_toc = last.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l));
             let is_curr_toc = p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l));
 
-            // NEVER merge frame elements in the header strip or footer strip!
-            let in_header_strip = last.bbox.y_max <= 55.0 || p.bbox.y_max <= 55.0;
-            let in_footer_strip = last.bbox.y_min >= 700.0 || p.bbox.y_min >= 700.0;
+            // NEVER merge frame elements in the adaptive header strip or footer strip!
+            let in_header_strip = last.bbox.y_max <= header_strip || p.bbox.y_max <= header_strip;
+            let in_footer_strip = last.bbox.y_min >= footer_strip || p.bbox.y_min >= footer_strip;
 
             if is_last_toc || is_curr_toc || in_header_strip || in_footer_strip {
                 false
@@ -200,7 +199,7 @@ fn starts_with_bullet_or_number(text: &str) -> bool {
 }
 
 /// Classifies heading level, paragraph type, list detection, alignment, and leading
-fn classify_single_paragraph(p: &mut ParagraphBlock, median_body_size: f64, page_width: f64) {
+fn classify_single_paragraph(p: &mut ParagraphBlock, scale: &TypographicScale, page_width: f64) {
     if p.lines.is_empty() {
         return;
     }
@@ -269,12 +268,12 @@ fn classify_single_paragraph(p: &mut ParagraphBlock, median_body_size: f64, page
     // A standalone short block that is:
     // a. ALL-CAPS and bold (universal standard for major chapter headings across Latin/Cyrillic scripts)
     // b. Centered and bold with elevated prominence (universal across CJK, Arabic, Indic, and all scripts)
-    // c. Significantly larger font size (>= 16pt or >= 1.35x median)
+    // c. Statistically superior font size (exceeding Otsu H1 threshold)
     let is_prominent_structural_heading = is_standalone_heading_layout
         && ((is_all_caps && has_bold) || (p.alignment == "center" && has_bold));
 
     if is_standalone_heading_layout {
-        if is_prominent_structural_heading || max_font_size >= 16.0 || max_font_size >= median_body_size * 1.35 {
+        if is_prominent_structural_heading || max_font_size >= scale.h1_threshold {
             p.tag = "H1".to_string();
             p.is_header = true;
             p.space_before = 0.0;
@@ -282,7 +281,7 @@ fn classify_single_paragraph(p: &mut ParagraphBlock, median_body_size: f64, page
             detect_alignment(p, page_width);
             detect_line_spacing(p);
             return;
-        } else if max_font_size >= 13.0 || max_font_size >= median_body_size * 1.20 {
+        } else if max_font_size >= scale.h2_threshold {
             p.tag = "H2".to_string();
             p.is_header = true;
             p.space_before = 0.0;
@@ -290,7 +289,7 @@ fn classify_single_paragraph(p: &mut ParagraphBlock, median_body_size: f64, page
             detect_alignment(p, page_width);
             detect_line_spacing(p);
             return;
-        } else if max_font_size >= median_body_size * 1.12 && has_bold {
+        } else if (has_bold || max_font_size > (scale.body_size + 0.5)) && is_standalone_heading_layout {
             p.tag = "H3".to_string();
             p.is_header = true;
             p.space_before = 0.0;
@@ -351,27 +350,16 @@ fn detect_alignment(p: &mut ParagraphBlock, page_width: f64) {
         let line_cx = (line.bbox.x_min + line.bbox.x_max) / 2.0;
         let page_cx = page_width / 2.0;
 
-        // Centered single line: must be reasonably short (< 75% page width),
-        // Checks page centering OR header-column centering when a top logo is on the left
-        let is_page_centered = (line_cx - page_cx).abs() <= 20.0 && line.bbox.x_min > 60.0;
-        let is_header_column_centered = line.bbox.x_min >= 150.0 && (line_cx - (page_width * 0.63)).abs() <= 35.0;
+        // Centered single line: must be reasonably short (< 75% page width) and centered
+        let is_page_centered = (line_cx - page_cx).abs() <= 25.0 && line.bbox.x_min > 40.0;
 
-        if line_w < (page_width * 0.75) && (is_page_centered || is_header_column_centered) {
+        if line_w < (page_width * 0.75) && is_page_centered {
             p.alignment = "center".to_string();
-        } else if line.bbox.x_min > (page_width * 0.45)
+        } else if line.bbox.x_min > (page_width * 0.40)
             && (page_width - line.bbox.x_max) <= 80.0
             && line_w < (page_width * 0.50)
         {
-            // Truly right-aligned single line (e.g. date header or author note on right side)
-            let first_word = line.words.first().map(|w| w.text.trim()).unwrap_or("");
-            let starts_with_lower_or_punct = first_word.chars().next().map_or(false, |c| {
-                c.is_lowercase() || c == '.' || c == ',' || c == '/' || c == '-' || c == ';'
-            });
-            if !starts_with_lower_or_punct {
-                p.alignment = "right".to_string();
-            } else {
-                p.alignment = "left".to_string();
-            }
+            p.alignment = "right".to_string();
         } else {
             p.alignment = "left".to_string();
         }
@@ -380,27 +368,20 @@ fn detect_alignment(p: &mut ParagraphBlock, page_width: f64) {
 
     // Multi-line elements (n >= 2):
     // 1. Right Alignment Check:
-    // Text can ONLY be right-aligned if it actually sits on the right side of the page!
-    // A paragraph starting at the left margin (< 40% of page width) is NEVER right-aligned.
     if p.bbox.x_min >= (page_width * 0.40)
         && (page_width - p.bbox.x_max) <= 80.0
         && p.bbox.width() < (page_width * 0.55)
     {
-        let first_word = p.lines.first().and_then(|l| l.words.first()).map(|w| w.text.trim()).unwrap_or("");
-        let starts_with_lower_or_punct = first_word.chars().next().map_or(false, |c| {
-            c.is_lowercase() || c == '.' || c == ',' || c == '/' || c == '-' || c == ';'
-        });
         let rights: Vec<f64> = p.lines.iter().map(|l| l.bbox.x_max).collect();
         let max_r = rights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let min_r = rights.iter().cloned().fold(f64::INFINITY, f64::min);
-        if !starts_with_lower_or_punct && (max_r - min_r) <= 8.0 {
+        if (max_r - min_r) <= 8.0 {
             p.alignment = "right".to_string();
             return;
         }
     }
 
     // 2. Center Alignment Check:
-    // All lines must be centered, paragraph must be narrower than page body width, and indented from left margin.
     let x_centers: Vec<f64> = p.lines.iter().map(|l| (l.bbox.x_min + l.bbox.x_max) / 2.0).collect();
     let min_c = x_centers.iter().cloned().fold(f64::INFINITY, f64::min);
     let max_c = x_centers.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -408,16 +389,9 @@ fn detect_alignment(p: &mut ParagraphBlock, page_width: f64) {
     let avg_center: f64 = x_centers.iter().sum::<f64>() / (n as f64);
     let page_cx = page_width / 2.0;
 
-    let x_lefts: Vec<f64> = p.lines.iter().map(|l| l.bbox.x_min).collect();
-    let min_l = x_lefts.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_l = x_lefts.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let delta_left = max_l - min_l;
-
-    if delta_center <= 6.0
-        && (avg_center - page_cx).abs() <= 20.0
-        && min_l > 70.0
-        && p.bbox.width() < (page_width * 0.70)
-        && delta_left > 8.0
+    if delta_center <= 8.0
+        && (avg_center - page_cx).abs() <= 25.0
+        && p.bbox.width() < (page_width * 0.75)
     {
         p.alignment = "center".to_string();
         return;
@@ -426,6 +400,7 @@ fn detect_alignment(p: &mut ParagraphBlock, page_width: f64) {
     // 3. Justified Alignment Check (Rata Kiri-Kanan / "both"):
     // In justified text, lines 0..n-2 (all lines except the short terminal line)
     // are stretched so their right edges align to the right margin!
+    let min_l = p.lines.iter().map(|l| l.bbox.x_min).fold(f64::INFINITY, f64::min);
     let non_last_lines = &p.lines[..n - 1];
     let rights: Vec<f64> = non_last_lines.iter().map(|l| l.bbox.x_max).collect();
     let max_r = rights.iter().cloned().fold(f64::NEG_INFINITY, f64::max);

@@ -85,14 +85,6 @@ impl DocxDocumentBuilder {
             p.tables.iter().any(|t| t.cells.iter().any(|row| row.len() >= 5))
         });
 
-        let multi_col_page_count = pages.iter().filter(|p| {
-            p.paragraphs.iter().filter(|para| para.column_index == 1).count() >= 5
-        }).count();
-
-        let is_doc_multi_column = !has_dominant_wide_tables
-            && pages.len() > 1
-            && (multi_col_page_count as f64 / pages.len() as f64) >= 0.35;
-
         for page in pages.iter() {
             last_page_w = points_to_twips(page.width_points);
             last_page_h = points_to_twips(page.height_points);
@@ -144,12 +136,8 @@ impl DocxDocumentBuilder {
             render_background_graphics_container(&mut xml, &bg_graphics, 4);
 
             // 2. Check if this page is a Multi-Column page
-            let page_has_toc = page.paragraphs.iter().any(|p| {
-                p.lines.iter().any(|l| l.tab_stops.iter().any(|ts| ts.is_leader_dot) || crate::dla::rxyc::is_toc_line_entry(l))
-            });
-            let is_page_multi_column = is_doc_multi_column
-                && !page_has_toc
-                && page.paragraphs.iter().filter(|p| p.column_index == 1).count() >= 5;
+            let is_page_multi_column = !has_dominant_wide_tables
+                && page.paragraphs.iter().any(|p| p.column_index == 1);
 
             enum PageItem<'a> {
                 Para(&'a ParagraphBlock),
@@ -358,9 +346,6 @@ impl DocxDocumentBuilder {
         let cols_xml = if has_emitted_first_multi_col_sect {
             r#"      <w:type w:val="continuous"/>
       <w:cols w:num="2" w:space="720"/>
-"#
-        } else if is_doc_multi_column {
-            r#"      <w:cols w:num="2" w:space="720"/>
 "#
         } else {
             ""

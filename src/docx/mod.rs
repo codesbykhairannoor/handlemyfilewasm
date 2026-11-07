@@ -61,18 +61,18 @@ impl DocxWriter {
         let header_count = pages.iter().filter(|p| p.header.is_some()).count();
         let footer_count = pages.iter().filter(|p| p.footer.is_some()).count();
 
-        // A document running header must be present across >= 50% of pages (or >= 2 if <= 3 pages)
+        // A document running header must be present across >= 50% of pages (and >= 2 pages)
         let has_header = if total_pages <= 3 {
             header_count >= 2
         } else {
-            (header_count as f64 / total_pages as f64) >= 0.50
+            header_count >= 2 && (header_count as f64 / total_pages as f64) >= 0.50
         };
 
-        // A document running footer must be present across >= 30% of pages (or >= 1 if <= 3 pages)
+        // A document running footer must be present across >= 50% of pages (and >= 2 pages)
         let has_footer = if total_pages <= 3 {
-            footer_count >= 1
+            footer_count >= 2
         } else {
-            (footer_count as f64 / total_pages as f64) >= 0.30
+            footer_count >= 2 && (footer_count as f64 / total_pages as f64) >= 0.50
         };
 
         let header_p = if has_header {
